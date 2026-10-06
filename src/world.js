@@ -77,8 +77,17 @@ export class World {
 
   // ---------- chunk lifecycle ----------
   generateChunk(cx, cz) {
+    const data = { blocks: new Uint8Array(CS * CS * CH), meta: new Uint8Array(CS * CS * CH), tint: new Uint8Array(768) };
+    this.gen.generate({ cx, cz, ...data });
+    return this.insertChunkData(cx, cz, data);
+  }
+
+  // Adopts generated arrays (from a worker or generateChunk), applies saved edits and lights it.
+  insertChunkData(cx, cz, data) {
     const c = new Chunk(cx, cz);
-    this.gen.generate(c);
+    c.blocks = data.blocks;
+    c.meta = data.meta;
+    c.tint = data.tint;
     const mods = this.store && this.store.loadMods(cx, cz);
     if (mods) {
       for (let i = 0; i < mods.length; i += 2) {

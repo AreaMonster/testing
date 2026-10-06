@@ -15,7 +15,10 @@ uniform mat4 uModel;
 uniform vec3 uOffset;
 uniform float uTime;
 uniform vec2 uEntLight;
+uniform vec3 uChunk;
 out vec3 vUV;
+out vec3 vRel;
+flat out int vFlags;
 out float vSky;
 out float vBlk;
 out float vBright;
@@ -28,10 +31,17 @@ void main() {
   vec3 uv = aUV;
   if ((flags & 1) != 0) uv.xy += vec2(uTime * 0.025, uTime * 0.05);
   if ((flags & 2) != 0) uv.xy += vec2(uTime * 0.006, uTime * 0.012);
+  vec3 ap = aPos + uChunk;
   if ((flags & 4) != 0) {
-    vec3 ap = aPos + uOffset;
     wp.x += sin(uTime * 1.7 + ap.x * 0.7 + ap.z * 0.45) * 0.06;
     wp.z += cos(uTime * 1.3 + ap.z * 0.6 + ap.x * 0.3) * 0.045;
+  }
+  if ((flags & 8) != 0) {
+    wp.y += (sin(uTime * 1.6 + ap.x * 0.9 + ap.z * 0.6) + sin(uTime * 1.1 - ap.x * 0.4 + ap.z * 1.2)) * 0.022 - 0.045;
+  }
+  if ((flags & 16) != 0) {
+    wp.x += sin(uTime * 1.2 + ap.y * 0.8 + ap.z * 0.6) * 0.022;
+    wp.z += cos(uTime * 0.9 + ap.x * 0.7 + ap.y * 0.5) * 0.018;
   }
   gl_Position = uProjView * wp;
   vUV = uv;
@@ -40,6 +50,8 @@ void main() {
   vBright = aLight.z;
   vTint = aTint;
   vDist = length(wp.xyz);
+  vRel = wp.xyz;
+  vFlags = flags;
 }`;
 
 const BLOCK_FS = `#version 300 es
@@ -52,7 +64,10 @@ uniform vec2 uFog;
 uniform float uAlphaTest;
 uniform vec4 uColorMul;
 uniform float uGamma;
+uniform vec3 uSunDir;
 in vec3 vUV;
+in vec3 vRel;
+flat in int vFlags;
 in float vSky;
 in float vBlk;
 in float vBright;
@@ -70,6 +85,18 @@ void main() {
   vec3 light = max(vec3(s) * skyCol, vec3(b) * vec3(1.0, 0.86, 0.64));
   light = pow(light * 0.94 + 0.05, vec3(uGamma));
   c.rgb *= light * vBright;
+  if ((vFlags & 1) != 0) {
+    vec3 v = normalize(vRel);
+    float fres = pow(1.0 - abs(v.y), 4.0);
+    c.rgb = mix(c.rgb, uFogColor * max(s, 0.08), fres * 0.45);
+    c.a = mix(c.a, 0.94, fres * 0.85);
+    if ((vFlags & 8) != 0 && uSunDir.y > 0.0) {
+      vec3 r = reflect(v, normalize(vec3(sin(vRel.x * 1.7 + vRel.z) * 0.04, 1.0, cos(vRel.z * 1.9 - vRel.x) * 0.04)));
+      float spec = pow(max(dot(r, uSunDir), 0.0), 90.0) * curve(vSky);
+      c.rgb += vec3(1.0, 0.95, 0.8) * spec * 1.4;
+      c.a = max(c.a, spec);
+    }
+  }
   c *= uColorMul;
   float fog = smoothstep(uFog.x, uFog.y, vDist);
   c.rgb = mix(c.rgb, uFogColor, fog);
@@ -298,6 +325,12 @@ export class Renderer {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
+    // blob shadow quad
+    {
+      const buf = new MeshBuf(4), L = LAYERS.shadow;
+      [[-0.5, 0.5, 0, 1], [0.5, 0.5, 1, 1], [0.5, -0.5, 1, 0], [-0.5, -0.5, 0, 0]].forEach(([x, z, u, v]) => buf.v(x, 0, z, u, v, L, 255, 0, 255, 0, 255, 255, 255));
+      this.shadowMesh = this.upload(buf.slice());
+    }
     // crack overlay cubes
     this.crackMeshes = [];
     for (let s = 0; s < 10; s++) {
@@ -442,6 +475,8 @@ export class Renderer {
     gl.uniform4f(u.uColorMul, 1, 1, 1, 1);
     gl.uniform2f(u.uEntLight, -1, -1);
     gl.uniform1f(u.uGamma, f.gamma);
+    gl.uniform3fv(u.uSunDir, f.sky.sunDir);
+    gl.uniform3f(u.uChunk, 0, 0, 0);
     gl.enable(gl.CULL_FACE);
     gl.disable(gl.BLEND);
     let drawn = 0, quads = 0;
@@ -454,6 +489,7 @@ export class Renderer {
       visible.push(c);
       if (!m.o) continue;
       gl.uniform3f(u.uOffset, x0, -cam.y, z0);
+      gl.uniform3f(u.uChunk, c.cx * 16, 0, c.cz * 16);
       gl.bindVertexArray(m.o.vao);
       gl.drawElements(gl.TRIANGLES, m.o.count, gl.UNSIGNED_INT, 0);
       drawn++;
@@ -462,6 +498,7 @@ export class Renderer {
     this.stats.chunks = drawn;
     this.stats.quads = quads;
 
+    gl.uniform3f(u.uChunk, 0, 0, 0);
     // Entities
     for (const e of f.entities) {
       if (!e.mesh) continue;
@@ -478,6 +515,31 @@ export class Renderer {
     gl.uniformMatrix4fv(u.uModel, false, this.ident.m);
     gl.uniform2f(u.uEntLight, -1, -1);
     gl.uniform4f(u.uColorMul, 1, 1, 1, 1);
+
+    // Blob shadows under entities
+    if (f.shadows && f.shadows.length) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(-2, -2);
+      gl.uniform2f(u.uEntLight, 1, 0);
+      gl.uniform1f(u.uAlphaTest, 0.01);
+      gl.bindVertexArray(this.shadowMesh.vao);
+      for (const sh of f.shadows) {
+        this.tmp.identity().translate(sh.x - cam.x, sh.y + 0.01 - cam.y, sh.z - cam.z).scale(sh.r, 1, sh.r);
+        gl.uniformMatrix4fv(u.uModel, false, this.tmp.m);
+        gl.uniform4f(u.uColorMul, 1, 1, 1, sh.a);
+        gl.drawElements(gl.TRIANGLES, this.shadowMesh.count, gl.UNSIGNED_INT, 0);
+      }
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+      gl.uniformMatrix4fv(u.uModel, false, this.ident.m);
+      gl.uniform2f(u.uEntLight, -1, -1);
+      gl.uniform4f(u.uColorMul, 1, 1, 1, 1);
+      gl.uniform1f(u.uAlphaTest, 0.5);
+    }
 
     // Particles
     if (f.particles.length) this.drawParticles(f, u);
@@ -536,6 +598,7 @@ export class Renderer {
       const c = visible[i], m = c.mesh;
       if (!m.w) continue;
       gl.uniform3f(u.uOffset, c.cx * 16 - cam.x, -cam.y, c.cz * 16 - cam.z);
+      gl.uniform3f(u.uChunk, c.cx * 16, 0, c.cz * 16);
       gl.bindVertexArray(m.w.vao);
       gl.drawElements(gl.TRIANGLES, m.w.count, gl.UNSIGNED_INT, 0);
     }

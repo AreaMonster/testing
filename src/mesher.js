@@ -1,6 +1,6 @@
 // Builds chunk geometry with smooth lighting and ambient occlusion.
 // Vertex layout: f32 [x,y,z,u,v,layer] + u8 [sky,block,bright,flags,r,g,b,0].
-import { B, OPAQUE, RENDER, TINT, CULLSAME, LIQUID, LEAF, TEXL, FRONTL, BLOCKS, R } from './blocks.js';
+import { B, OPAQUE, RENDER, TINT, CULLSAME, LIQUID, LEAF, LOG, TEXL, FRONTL, BLOCKS, R } from './blocks.js';
 import { CH } from './consts.js';
 import { hash2 } from './noise.js';
 import { BIRCH_TINT, SPRUCE_TINT } from './textures.js';
@@ -142,6 +142,7 @@ function tintOf(b, f, x, z) {
 
 function cubeFaces(buf, b, p, x, y, z, rt, fancy) {
   const isLeaf = LEAF[b];
+  const vflags = isLeaf ? 16 : 0;
   const front = BLOCKS[b].front;
   for (let f = 0; f < 6; f++) {
     const np = p + NOFF[f];
@@ -149,7 +150,11 @@ function cubeFaces(buf, b, p, x, y, z, rt, fancy) {
     if (OPAQUE[nb]) continue;
     if (nb === b && CULLSAME[b]) continue;
     if (isLeaf && !fancy && LEAF[nb]) continue;
-    const layer = front && f === (pm[p] || 0) ? FRONTL[b] : TEXL[b * 6 + f];
+    let layer = front && f === (pm[p] || 0) ? FRONTL[b] : TEXL[b * 6 + f];
+    if (LOG[b] && pm[p]) {
+      const end = pm[p] === 1 ? f === 0 || f === 1 : f === 4 || f === 5;
+      layer = end ? TEXL[b * 6 + 2] : TEXL[b * 6];
+    }
     const [tr, tg, tb] = tintOf(b, f, x, z);
     const L0 = pl[np];
     for (let k = 0; k < 4; k++) {
@@ -174,7 +179,7 @@ function cubeFaces(buf, b, p, x, y, z, rt, fancy) {
     for (let j = 0; j < 4; j++) {
       const k = flip ? (j + 1) & 3 : j;
       const c = cp[k];
-      buf.v(x + c[0], y + c[1], z + c[2], UVS[k][0], UVS[k][1], layer, sk[k], bk[k], sh * AO_F[ao[k]], 0, tr, tg, tb);
+      buf.v(x + c[0], y + c[1], z + c[2], UVS[k][0], UVS[k][1], layer, sk[k], bk[k], sh * AO_F[ao[k]], vflags, tr, tg, tb);
     }
   }
 }
@@ -252,7 +257,8 @@ function liquid(buf, b, p, x, y, z) {
       if (c[1] === 1) cy = H(c[0], c[2]);
       let v = UVS[k][1];
       if (f !== 2 && f !== 3 && c[1] === 1) v = 1 - cy;
-      buf.v(x + c[0], y + cy, z + c[2], UVS[k][0], v, layer, s, bl, sh, flags, 255, 255, 255);
+      const wave = kind === 1 && c[1] === 1 && cy < 1 ? 8 : 0;
+      buf.v(x + c[0], y + cy, z + c[2], UVS[k][0], v, layer, s, bl, sh, flags | wave, 255, 255, 255);
     }
   }
 }

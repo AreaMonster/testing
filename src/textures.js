@@ -1,7 +1,7 @@
 // Procedural 16x16 pixel-art textures. Every block, item, mob skin and crack
 // stage is painted here at startup into one texture array.
 import { mulberry32, hashStr } from './noise.js';
-import { WOOL_COLORS, BLOCKS, ITEMS, R, TEXL, FRONTL, itemDef } from './blocks.js';
+import { WOOL_COLORS, TERRACOTTA_COLORS, BLOCKS, ITEMS, R, TEXL, FRONTL, itemDef } from './blocks.js';
 
 export const LAYERS = {};
 export const layerData = [];
@@ -477,70 +477,232 @@ for (const [k, , col] of WOOL_COLORS) {
 }
 add('white', (px) => px.each((x, y) => px.set(x, y, [255, 255, 255])));
 
-// ---------- mob skins (original designs) ----------
-const skin = (base, amp = 0.1) => (px, rnd) => noiseFill(px, rnd, base, amp, 4, 1);
-const eyes = (px, y, white, pupil, x1 = 3, x2 = 11) => {
-  px.set(x1, y, white); px.set(x1 + 1, y, pupil); px.set(x2, y, pupil); px.set(x2 + 1, y, white);
-  px.set(x1, y + 1, white); px.set(x1 + 1, y + 1, pupil); px.set(x2, y + 1, pupil); px.set(x2 + 1, y + 1, white);
+// ---------- new terrain textures ----------
+add('red_sand', (px, rnd) => {
+  noiseFill(px, rnd, [190, 104, 52], 0.14, 4, 1);
+  for (let i = 0; i < 10; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), [160, 84, 40]);
+});
+for (const [k, , col] of TERRACOTTA_COLORS) {
+  add(k ? `terracotta_${k.toLowerCase()}` : 'terracotta', (px, rnd) => noiseFill(px, rnd, col, 0.07, 3, 2));
+}
+add('log_acacia', paintBark([104, 98, 90], [72, 66, 60]));
+add('log_acacia_top', paintLogTop([206, 116, 64], [180, 96, 50], [104, 98, 90]));
+add('leaves_acacia', paintLeaves);
+add('planks_acacia', paintPlanks([176, 96, 54]));
+add('podzol_top', (px, rnd) => {
+  const f = field(rnd, 1);
+  px.each((x, y) => {
+    const v = f[y * 16 + x];
+    px.set(x, y, v > 0.7 ? [140, 100, 48] : v > 0.4 ? mul([98, 66, 34], 0.9 + rnd() * 0.2) : mul([76, 52, 30], 0.9 + rnd() * 0.2));
+  });
+});
+add('podzol_side', (px, rnd) => {
+  paintDirt(px, rnd);
+  for (let x = 0; x < 16; x++) {
+    const h = 2 + (rnd() < 0.5 ? 1 : 0);
+    for (let y = 0; y < h; y++) px.set(x, y, mul([92, 62, 32], 0.85 + rnd() * 0.3));
+  }
+});
+const pumpkinSide = (px, rnd) => {
+  px.each((x, y) => {
+    let c = mul([214, 122, 30], 0.92 + rnd() * 0.08);
+    if (x % 4 === 0) c = mul([180, 96, 22], 0.95 + rnd() * 0.08);
+    if (y === 0 || y === 15) c = mul(c, 0.85);
+    px.set(x, y, c);
+  });
 };
-add('pig_skin', skin([238, 164, 160], 0.08));
-add('pig_face', (px, rnd) => {
-  skin([238, 164, 160], 0.08)(px, rnd);
-  eyes(px, 5, [250, 250, 250], [30, 20, 30], 2, 12);
-  for (let y = 8; y < 13; y++) for (let x = 5; x < 11; x++) px.set(x, y, [226, 128, 134]);
-  px.set(6, 10, [120, 50, 60]); px.set(9, 10, [120, 50, 60]);
+add('pumpkin_side', pumpkinSide);
+add('pumpkin_top', (px, rnd) => {
+  px.each((x, y) => {
+    const d = Math.max(Math.abs(x - 7.5), Math.abs(y - 7.5));
+    px.set(x, y, mul(d > 6 ? [190, 104, 24] : [214, 122, 30], 0.92 + rnd() * 0.08));
+  });
+  for (let y = 6; y < 10; y++) for (let x = 7; x < 9; x++) px.set(x, y, [96, 82, 34]);
 });
-add('cow_skin', (px, rnd) => {
-  const f = field(rnd, 2);
-  px.each((x, y) => px.set(x, y, f[y * 16 + x] > 0.55 ? mul([82, 58, 40], 0.9 + rnd() * 0.15) : mul([236, 234, 228], 0.94 + rnd() * 0.06)));
+add('pumpkin_face', (px, rnd) => {
+  pumpkinSide(px, rnd);
+  const glow = (x, y) => px.set(x, y, [255, 216, 90]);
+  [[3, 4], [4, 4], [3, 5], [4, 5], [5, 5], [11, 4], [12, 4], [10, 5], [11, 5], [12, 5], [7, 7], [8, 7]].forEach(([x, y]) => glow(x, y));
+  for (let x = 3; x < 13; x++) { glow(x, 10); if (x % 3 !== 0) glow(x, 11); }
+  glow(4, 9); glow(11, 9);
 });
-add('cow_face', (px, rnd) => {
-  px.each((x, y) => px.set(x, y, mul([86, 60, 40], 0.92 + rnd() * 0.1)));
-  for (let y = 0; y < 9; y++) for (let x = 6; x < 10; x++) px.set(x, y, [236, 234, 228]);
-  eyes(px, 5, [236, 234, 228], [20, 16, 16], 2, 12);
-  for (let y = 10; y < 16; y++) for (let x = 3; x < 13; x++) px.set(x, y, [208, 172, 150]);
-  px.set(5, 12, [70, 40, 34]); px.set(10, 12, [70, 40, 34]);
+add('sugar_cane', (px) => {
+  clear(px);
+  for (const sx of [3, 7, 11]) for (let y = 0; y < 16; y++) {
+    const knot = (y + sx) % 5 === 0;
+    px.set(sx, y, knot ? [150, 196, 96] : [120, 176, 76]);
+    px.set(sx + 1, y, knot ? [120, 166, 76] : [92, 146, 56]);
+  }
+  [[2, 3], [1, 2], [6, 9], [5, 8], [13, 6], [14, 5]].forEach(([x, y]) => px.set(x, y, [110, 170, 70]));
 });
-add('sheep_wool', (px, rnd) => {
-  const vo = voronoi(rnd, 14);
-  px.each((x, y) => { const c = vo(x, y); px.set(x, y, mul([236, 236, 230], 0.82 + Math.min(1, (c.d2 - c.d1) / 2) * 0.2)); });
+add('fern', (px, rnd) => {
+  clear(px);
+  for (let i = 0; i < 6; i++) {
+    let x = 4 + rnd() * 8, y = 15;
+    const dx = (rnd() - 0.5) * 0.8, len = 7 + Math.floor(rnd() * 7);
+    for (let k = 0; k < len; k++) {
+      const v = 0.55 + (k / len) * 0.4;
+      px.set(Math.round(x), y, [200 * v, 200 * v, 200 * v]);
+      if (k > 2 && k % 2 === 0) { px.set(Math.round(x) - 1, y, [170 * v, 170 * v, 170 * v]); px.set(Math.round(x) + 1, y, [170 * v, 170 * v, 170 * v]); }
+      x += dx; y--;
+    }
+  }
 });
-add('sheep_skin', skin([214, 194, 170], 0.08));
+add('cornflower', flower([70, 110, 220], [230, 230, 250]));
+add('daisy', flower([244, 244, 238], [236, 196, 52]));
+add('shadow', (px) => px.each((x, y) => {
+  const d = Math.hypot(x - 7.5, y - 7.5) / 7.5;
+  px.set(x, y, [0, 0, 0], Math.max(0, 1 - d * d) * 200);
+}));
+add('flame', (px) => px.each((x, y) => {
+  const d = Math.hypot(x - 7.5, (y - 8.5) * 0.8) / 7;
+  px.set(x, y, d < 0.45 ? [255, 246, 190] : [255, 170, 60], d < 1 ? 255 : 0);
+}));
+
+// ---------- creature & character skins (original designs) ----------
+// Each box face is painted at native resolution into the top-left w×h pixels of
+// its own layer; the mesher maps 1 texel to 1 model pixel.
+const rect = (px, x0, y0, w, h, c) => { for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) px.set(x, y, c); };
+const speck = (px, rnd, base, amp) => px.each((x, y) => px.set(x, y, mul(base, 1 - amp / 2 + rnd() * amp)));
+function skinLayer(name, base, amp, paint) {
+  add(name, (px, rnd) => { speck(px, rnd, base, amp); if (paint) paint(px, rnd); });
+}
+
+// The Wanderer: auburn hair, teal scarf, ochre field jacket with a satchel strap.
+const W = {
+  skin: [214, 160, 118], skinD: [186, 132, 96], hair: [110, 58, 32], hairD: [82, 42, 24], hairHi: [140, 78, 44],
+  eye: [44, 140, 132], white: [242, 240, 234], brow: [74, 38, 22], mouth: [168, 98, 82],
+  jacket: [200, 126, 50], jacketD: [166, 98, 36], jacketHi: [222, 150, 72], patch: [132, 84, 46],
+  scarf: [44, 126, 132], scarfD: [30, 94, 100], strap: [96, 62, 36], buckle: [212, 180, 86],
+  pants: [60, 82, 54], pantsD: [46, 64, 42], boots: [98, 64, 40], sole: [50, 36, 26],
+};
+const hairNoise = (px, rnd, x0, y0, w, h) => { for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) px.set(x, y, rnd() < 0.25 ? W.hairHi : rnd() < 0.3 ? W.hairD : W.hair); };
+skinLayer('wd_head_front', W.skin, 0.05, (px, rnd) => {
+  hairNoise(px, rnd, 0, 0, 8, 2);
+  hairNoise(px, rnd, 0, 2, 5, 1);
+  px.set(0, 3, W.hair); px.set(0, 4, W.hairD); px.set(7, 2, W.hair); px.set(7, 3, W.hairD);
+  px.set(1, 3, W.brow); px.set(2, 3, W.brow); px.set(5, 3, W.brow); px.set(6, 3, W.brow);
+  px.set(1, 4, W.white); px.set(2, 4, W.eye); px.set(5, 4, W.eye); px.set(6, 4, W.white);
+  px.set(3, 5, W.skinD); px.set(4, 5, W.skinD);
+  px.set(3, 6, W.mouth); px.set(4, 6, W.mouth);
+  px.set(1, 6, [222, 150, 120]); px.set(6, 6, [222, 150, 120]);
+});
+skinLayer('wd_head_right', W.skin, 0.05, (px, rnd) => { hairNoise(px, rnd, 0, 0, 8, 3); hairNoise(px, rnd, 0, 3, 3, 4); px.set(4, 4, W.skinD); px.set(4, 5, W.skinD); });
+skinLayer('wd_head_left', W.skin, 0.05, (px, rnd) => { hairNoise(px, rnd, 0, 0, 8, 3); hairNoise(px, rnd, 5, 3, 3, 4); px.set(3, 4, W.skinD); px.set(3, 5, W.skinD); });
+skinLayer('wd_head_back', W.hair, 0.2, (px, rnd) => { hairNoise(px, rnd, 0, 0, 8, 7); rect(px, 0, 7, 8, 1, W.skinD); px.set(3, 5, W.scarf); px.set(4, 5, W.scarf); });
+skinLayer('wd_head_top', W.hair, 0.2, (px, rnd) => { hairNoise(px, rnd, 0, 0, 8, 8); for (let y = 0; y < 8; y++) px.set(5, y, W.hairD); });
+skinLayer('wd_head_bottom', W.skinD, 0.05);
+const jacketBody = (px, rnd, w, strapDir) => {
+  for (let y = 2; y < 9; y++) for (let x = 0; x < w; x++) px.set(x, y, rnd() < 0.15 ? W.jacketD : W.jacket);
+  rect(px, 0, 0, w, 2, W.scarf);
+  for (let x = 0; x < w; x++) if (rnd() < 0.3) px.set(x, 1, W.scarfD);
+  rect(px, 0, 9, w, 1, W.strap);
+  rect(px, 0, 10, w, 2, W.pants);
+  if (strapDir) for (let k = 0; k < 8; k++) px.set(strapDir > 0 ? k : 7 - k, 2 + k, W.strap);
+};
+skinLayer('wd_body_front', W.jacket, 0.08, (px, rnd) => {
+  jacketBody(px, rnd, 8, 1);
+  for (let y = 2; y < 9; y++) if (px.get(3, y)[0] !== W.strap[0]) px.set(3, y, W.jacketD);
+  px.set(5, 2, W.scarfD); px.set(5, 3, W.scarf); px.set(6, 3, W.scarfD); px.set(5, 4, W.scarfD);
+  rect(px, 5, 6, 2, 2, W.jacketD); px.set(5, 6, W.jacketHi);
+  px.set(3, 9, W.buckle); px.set(4, 9, W.buckle);
+  px.set(1, 11, W.pantsD); px.set(6, 11, W.pantsD);
+});
+skinLayer('wd_body_back', W.jacket, 0.08, (px, rnd) => { jacketBody(px, rnd, 8, -1); px.set(3, 10, W.pantsD); px.set(4, 10, W.pantsD); });
+skinLayer('wd_body_side', W.jacket, 0.08, (px, rnd) => { jacketBody(px, rnd, 4, 0); });
+skinLayer('wd_body_side_bag', W.jacket, 0.08, (px, rnd) => {
+  jacketBody(px, rnd, 4, 0);
+  rect(px, 0, 6, 4, 4, [120, 82, 46]); rect(px, 0, 6, 4, 1, [92, 60, 34]); px.set(1, 7, W.buckle);
+});
+skinLayer('wd_body_top', W.scarf, 0.1);
+skinLayer('wd_body_bottom', W.pants, 0.1);
+skinLayer('wd_arm_side', W.jacket, 0.1, (px, rnd) => {
+  rect(px, 0, 8, 4, 1, W.jacketD);
+  rect(px, 0, 9, 4, 3, W.skin);
+  rect(px, 0, 11, 4, 1, W.skinD);
+  px.set(1, 5, W.patch); px.set(2, 5, W.patch); px.set(1, 6, W.patch); px.set(2, 6, W.patch);
+});
+skinLayer('wd_arm_inner', W.jacket, 0.1, (px) => { rect(px, 0, 8, 4, 1, W.jacketD); rect(px, 0, 9, 4, 3, W.skin); rect(px, 0, 11, 4, 1, W.skinD); });
+skinLayer('wd_arm_top', W.jacketHi, 0.08);
+skinLayer('wd_arm_bottom', W.skinD, 0.05);
+skinLayer('wd_leg_side', W.pants, 0.12, (px) => {
+  rect(px, 0, 5, 4, 1, W.pantsD);
+  rect(px, 0, 8, 4, 1, [72, 48, 30]);
+  rect(px, 0, 9, 4, 2, W.boots);
+  rect(px, 0, 11, 4, 1, W.sole);
+});
+skinLayer('wd_leg_top', W.pants, 0.1);
+skinLayer('wd_leg_bottom', W.sole, 0.1);
+
+// Ghoul: mottled grey-green skin, ember eyes, rags and a rope belt.
+const G = { skin: [116, 132, 102], skinD: [88, 104, 78], cloth: [84, 88, 98], clothD: [62, 64, 72], vest: [94, 70, 46], rope: [150, 130, 86], pants: [58, 54, 52], eye: [255, 112, 40], socket: [24, 22, 22], hair: [44, 42, 36] };
+const mottled = (px, rnd) => px.each((x, y) => px.set(x, y, rnd() < 0.3 ? G.skinD : mul(G.skin, 0.94 + rnd() * 0.1)));
+add('gh_head_front', (px, rnd) => {
+  mottled(px, rnd);
+  for (let x = 0; x < 8; x++) if (rnd() < 0.6) px.set(x, 0, G.hair);
+  rect(px, 1, 3, 2, 2, G.socket); rect(px, 5, 3, 2, 2, G.socket);
+  px.set(2, 4, G.eye); px.set(5, 4, G.eye);
+  px.set(3, 5, G.skinD); px.set(4, 5, G.skinD);
+  for (let x = 2; x < 6; x++) px.set(x, 6, x % 2 ? G.socket : [196, 190, 160]);
+  px.set(6, 1, [140, 80, 70]); px.set(6, 2, [140, 80, 70]);
+});
+add('gh_head_side', (px, rnd) => { mottled(px, rnd); for (let x = 0; x < 8; x++) if (rnd() < 0.5) px.set(x, 0, G.hair); px.set(3, 4, G.skinD); });
+add('gh_head_back', (px, rnd) => { mottled(px, rnd); for (let x = 0; x < 8; x++) for (let y = 0; y < 3; y++) if (rnd() < 0.5) px.set(x, y, G.hair); });
+add('gh_head_top', (px, rnd) => { mottled(px, rnd); px.each((x, y) => { if (rnd() < 0.45) px.set(x, y, G.hair); }); });
+const rags = (px, rnd, w, front) => {
+  px.each((x, y) => px.set(x, y, rnd() < 0.2 ? G.clothD : G.cloth));
+  if (front) { rect(px, 0, 0, 2, 9, G.vest); rect(px, w - 2, 0, 2, 9, G.vest); }
+  for (let i = 0; i < 4; i++) px.set(2 + Math.floor(rnd() * (w - 4 > 0 ? w - 4 : 1)), 2 + Math.floor(rnd() * 6), G.skinD);
+  rect(px, 0, 9, w, 1, G.rope);
+  rect(px, 0, 10, w, 6, G.pants);
+};
+add('gh_body_front', (px, rnd) => rags(px, rnd, 8, true));
+add('gh_body_back', (px, rnd) => rags(px, rnd, 8, false));
+add('gh_body_side', (px, rnd) => rags(px, rnd, 4, false));
+add('gh_body_top', (px, rnd) => speck(px, rnd, G.cloth, 0.15));
+add('gh_arm', (px, rnd) => {
+  mottled(px, rnd);
+  for (let x = 0; x < 4; x++) { const h = 2 + Math.floor(rnd() * 3); for (let y = 0; y < h; y++) px.set(x, y, G.cloth); }
+  rect(px, 0, 11, 4, 1, G.skinD);
+});
+add('gh_leg', (px, rnd) => {
+  px.each((x, y) => px.set(x, y, rnd() < 0.2 ? [46, 42, 40] : G.pants));
+  for (let x = 0; x < 4; x++) { const h = 9 + Math.floor(rnd() * 2); for (let y = h; y < 16; y++) px.set(x, y, y > 10 ? G.skinD : G.skin); }
+});
+
+// Pig
+const P_ = { skin: [238, 166, 160], skinD: [214, 136, 136], hoof: [120, 78, 80], snout: [226, 128, 134], nostril: [120, 52, 62] };
+const pigSkin = (px, rnd) => px.each((x, y) => px.set(x, y, rnd() < 0.08 ? P_.skinD : mul(P_.skin, 0.96 + rnd() * 0.06)));
+add('pig_skin', pigSkin);
+add('pig_head_front', (px, rnd) => { pigSkin(px, rnd); px.set(1, 2, [250, 250, 250]); px.set(2, 2, [30, 20, 30]); px.set(5, 2, [30, 20, 30]); px.set(6, 2, [250, 250, 250]); });
+add('pig_snout', (px) => { px.each((x, y) => px.set(x, y, P_.snout)); px.set(1, 1, P_.nostril); px.set(2, 1, P_.nostril); px.set(0, 0, P_.skinD); px.set(3, 0, P_.skinD); });
+add('pig_leg', (px, rnd) => { pigSkin(px, rnd); rect(px, 0, 5, 4, 2, P_.hoof); });
+
+// Cow
+const C_ = { brown: [92, 64, 44], white: [236, 234, 228], muzzle: [212, 180, 156], horn: [232, 222, 194], hoof: [52, 40, 34], udder: [236, 160, 160] };
+const cowSkin = (px, rnd) => { const f = field(rnd, 2); px.each((x, y) => px.set(x, y, f[y * 16 + x] > 0.5 ? mul(C_.white, 0.95 + rnd() * 0.05) : mul(C_.brown, 0.9 + rnd() * 0.15))); };
+add('cow_skin', cowSkin);
+add('cow_head_front', (px, rnd) => {
+  px.each((x, y) => px.set(x, y, mul(C_.brown, 0.9 + rnd() * 0.12)));
+  rect(px, 3, 0, 2, 5, C_.white); rect(px, 2, 1, 4, 2, C_.white);
+  px.set(1, 3, [20, 16, 16]); px.set(6, 3, [20, 16, 16]); px.set(0, 3, C_.white); px.set(7, 3, C_.white);
+});
+add('cow_muzzle', (px) => { px.each((x, y) => px.set(x, y, C_.muzzle)); px.set(1, 1, [80, 50, 44]); px.set(4, 1, [80, 50, 44]); });
+add('cow_horn', (px) => { px.each((x, y) => px.set(x, y, y === 0 ? [180, 170, 140] : C_.horn)); });
+add('cow_leg', (px, rnd) => { cowSkin(px, rnd); rect(px, 0, 10, 4, 6, C_.hoof); });
+add('cow_udder', (px) => px.each((x, y) => px.set(x, y, C_.udder)));
+
+// Sheep
+const S_ = { wool: [236, 234, 226], woolD: [214, 212, 204], face: [206, 184, 160], faceD: [182, 158, 134], hoof: [70, 60, 54] };
+const wool = (px, rnd) => { const vo = voronoi(rnd, 18); px.each((x, y) => { const c = vo(x, y); px.set(x, y, c.d2 - c.d1 < 0.6 ? S_.woolD : mul(S_.wool, 0.95 + c.v * 0.06)); }); };
+add('sheep_wool', wool);
 add('sheep_face', (px, rnd) => {
-  skin([214, 194, 170], 0.08)(px, rnd);
-  eyes(px, 6, [250, 250, 250], [40, 30, 30], 3, 11);
-  px.set(7, 11, [160, 120, 110]); px.set(8, 11, [160, 120, 110]);
-  for (let x = 0; x < 16; x++) for (let y = 0; y < 3; y++) px.set(x, y, mul([236, 236, 230], 0.9 + rnd() * 0.1));
+  px.each((x, y) => px.set(x, y, mul(S_.face, 0.95 + rnd() * 0.08)));
+  px.set(1, 2, [250, 250, 250]); px.set(2, 2, [40, 30, 30]); px.set(3, 2, [40, 30, 30]); px.set(4, 2, [250, 250, 250]);
+  px.set(2, 4, S_.faceD); px.set(3, 4, S_.faceD);
 });
-add('ghoul_skin', skin([118, 132, 104], 0.14));
-add('ghoul_face', (px, rnd) => {
-  skin([118, 132, 104], 0.14)(px, rnd);
-  for (const ex of [3, 10]) for (let y = 5; y < 8; y++) for (let x = ex; x < ex + 3; x++) px.set(x, y, [20, 18, 18]);
-  px.set(4, 6, [230, 70, 40]); px.set(11, 6, [230, 70, 40]);
-  for (let x = 4; x < 12; x++) px.set(x, 11, x % 2 ? [40, 30, 28] : [200, 196, 170]);
-  for (let x = 0; x < 16; x++) { px.set(x, 0, [52, 48, 40]); if (rnd() < 0.6) px.set(x, 1, [52, 48, 40]); }
-});
-add('ghoul_shirt', (px, rnd) => {
-  noiseFill(px, rnd, [104, 78, 52], 0.18, 4, 1);
-  for (let i = 0; i < 9; i++) px.set(Math.floor(rnd() * 16), 10 + Math.floor(rnd() * 6), [118, 132, 104]);
-  for (let y = 0; y < 16; y++) if (rnd() < 0.3) px.set(Math.floor(rnd() * 16), y, [70, 52, 34]);
-});
-add('ghoul_pants', skin([62, 60, 68], 0.14));
-add('player_face', (px, rnd) => {
-  skin([216, 164, 124], 0.06)(px, rnd);
-  for (let x = 0; x < 16; x++) for (let y = 0; y < 4; y++) px.set(x, y, mul([62, 40, 26], 0.9 + rnd() * 0.15));
-  px.set(0, 4, [62, 40, 26]); px.set(15, 4, [62, 40, 26]); px.set(1, 4, [62, 40, 26]);
-  eyes(px, 7, [250, 250, 250], [52, 98, 70], 3, 11);
-  for (let x = 6; x < 10; x++) px.set(x, 11, [168, 104, 84]);
-});
-add('player_hair', skin([62, 40, 26], 0.15));
-add('player_skin', skin([216, 164, 124], 0.06));
-add('player_jacket', (px, rnd) => {
-  noiseFill(px, rnd, [214, 112, 38], 0.1, 4, 1);
-  for (let y = 0; y < 16; y++) px.set(7, y, [120, 60, 20]);
-  for (let x = 0; x < 16; x++) px.set(x, 15, [150, 76, 24]);
-});
-add('player_pants', skin([52, 74, 48], 0.12));
+add('sheep_skin', (px, rnd) => px.each((x, y) => px.set(x, y, mul(S_.face, 0.94 + rnd() * 0.08))));
+add('sheep_leg', (px, rnd) => { wool(px, rnd); rect(px, 0, 5, 4, 7, S_.face); rect(px, 0, 10, 4, 2, S_.hoof); });
 
 // ---------- item sprites ----------
 function sprite(name, fn) {
@@ -638,6 +800,23 @@ const bucket = (fill) => (px) => {
   [[3, 4], [4, 3], [5, 2], [6, 2], [7, 2], [8, 2], [9, 2], [10, 2], [11, 3], [12, 4]].forEach(([x, y]) => px.set(x, y, [100, 100, 108]));
   if (fill) for (let x = 4; x < 12; x++) { px.set(x, 5, fill[0]); px.set(x, 6, fill[1]); }
 };
+sprite('sugar', (px, rnd) => {
+  for (let y = 6; y < 14; y++) for (let x = 2; x < 14; x++) {
+    const d = Math.hypot((x - 7.5) / 5.5, (y - 11) / 3.5);
+    if (d < 1 && rnd() < 0.9) px.set(x, y, rnd() < 0.3 ? [214, 214, 226] : [250, 250, 252]);
+  }
+  [[4, 5], [9, 4], [12, 6], [6, 3]].forEach(([x, y]) => px.set(x, y, [250, 250, 252]));
+});
+sprite('pumpkin_pie', (px, rnd) => {
+  for (let y = 5; y < 13; y++) for (let x = 1; x < 15; x++) {
+    const top = y < 8;
+    const edge = x === 1 || x === 14 || y === 12;
+    if (top && (x + y) % 2 === 0 && y === 5) continue;
+    px.set(x, y, edge ? [150, 92, 40] : top ? mul([214, 120, 44], 0.92 + rnd() * 0.1) : [234, 196, 130]);
+  }
+  for (let x = 2; x < 14; x++) px.set(x, 8, [196, 150, 90]);
+  px.set(5, 6, [246, 236, 210]); px.set(10, 6, [246, 236, 210]);
+});
 sprite('bucket', bucket(null));
 sprite('water_bucket', bucket([[70, 120, 230], [44, 86, 200]]));
 sprite('lava_bucket', bucket([[255, 180, 50], [226, 90, 20]]));

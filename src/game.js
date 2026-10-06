@@ -3,7 +3,7 @@ import { Renderer } from './renderer.js';
 import { buildChunkMesh } from './mesher.js';
 import { World, ckey } from './world.js';
 import { WorldGen, BIOME_NAMES, placeTree } from './worldgen.js';
-import { B, I, BLOCKS, ITEMS, OPAQUE, LIQUID, REPLACEABLE, TEXL, itemDef, itemName, maxStackOf, canHarvest, breakTime, toolOf, nameToId } from './blocks.js';
+import { B, I, BLOCKS, ITEMS, OPAQUE, SOLID, LIQUID, REPLACEABLE, TEXL, LOG, itemDef, itemName, maxStackOf, canHarvest, breakTime, toolOf, nameToId } from './blocks.js';
 import { Inventory, SMELT, SMELT_TIME, fuelTime } from './crafting.js';
 import { Entity, ItemEntity, FallingBlock, Mob, MOB_TYPES, poseDraws, mobParts } from './entities.js';
 import { moveEntity, raycast, rayBox, entityBox, groundBelow, boxTouches } from './physics.js';
@@ -15,6 +15,12 @@ import { boxMesh } from './mesher.js';
 const L = (n) => LAYERS[n];
 
 const rand = Math.random;
+const angleDiff = (a, b) => {
+  let d = (a - b) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+};
 
 class Player extends Entity {
   constructor() {
@@ -53,8 +59,54 @@ class Player extends Entity {
     this.wasInWater = false;
     this.eyeLiquid = 0;
     this.fovBoost = 0;
+    this.bodyYaw = 0;
+    this.limbPhase = 0;
+    this.limbAmt = 0;
   }
   held() { return this.inv.get(this.sel); }
+}
+
+// Generates chunks in Web Workers; falls back to the main thread if workers fail.
+class GenPool {
+  constructor() {
+    this.workers = [];
+    this.pending = new Map();
+    this.ready = [];
+    this.failed = false;
+    const n = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 4) - 1));
+    try {
+      for (let i = 0; i < n; i++) {
+        const w = new Worker(new URL('./genworker.js', import.meta.url), { type: 'module' });
+        const slot = { w, jobs: 0 };
+        w.onmessage = (e) => this.done(slot, e.data);
+        w.onerror = (e) => { e.preventDefault?.(); this.fail(); };
+        this.workers.push(slot);
+      }
+    } catch {
+      this.fail();
+    }
+  }
+  fail() {
+    this.failed = true;
+    this.pending.clear();
+    for (const s of this.workers) s.w.terminate();
+    this.workers = [];
+  }
+  key(epoch, cx, cz) { return `${epoch}:${cx},${cz}`; }
+  has(epoch, cx, cz) { return this.pending.has(this.key(epoch, cx, cz)); }
+  get capacity() { return this.workers.length * 3; }
+  request(epoch, seed, cx, cz) {
+    let best = this.workers[0];
+    for (const s of this.workers) if (s.jobs < best.jobs) best = s;
+    best.jobs++;
+    this.pending.set(this.key(epoch, cx, cz), best);
+    best.w.postMessage({ id: epoch, seed, cx, cz });
+  }
+  done(slot, d) {
+    slot.jobs--;
+    this.pending.delete(this.key(d.id, d.cx, d.cz));
+    this.ready.push(d);
+  }
 }
 
 const DEFAULT_SETTINGS = {
@@ -107,6 +159,8 @@ export class Game {
     this.targetMob = null;
     this.cloudOffset = 0;
     this.loadStart = 0;
+    this.pool = new GenPool();
+    this.epoch = 0;
     this.applySettings();
   }
 
@@ -119,6 +173,8 @@ export class Game {
 
   // ---------------------------------------------------------------- worlds
   disposeWorld() {
+    this.epoch++;
+    this.pool.ready.length = 0;
     if (!this.world) return;
     for (const c of this.world.chunks.values()) this.renderer.freeChunk(c);
     this.world = null;
@@ -223,13 +279,29 @@ export class Game {
     const t0 = performance.now();
     const genR2 = (R + 1.5) ** 2, meshR2 = (R + 0.5) ** 2;
     let busy = false;
+    const pool = this.pool;
+    // Adopt finished worker results; lighting does not depend on arrival order.
+    while (pool.ready.length && performance.now() - t0 < budget) {
+      const d = pool.ready.shift();
+      if (d.id !== this.epoch || w.getChunk(d.cx, d.cz)) continue;
+      if ((d.cx - pcx) ** 2 + (d.cz - pcz) ** 2 > (R + 3) ** 2) continue;
+      const c = w.insertChunkData(d.cx, d.cz, d);
+      if (c.fresh && this.state !== 'menu') this.spawnInitialAnimals(c);
+      busy = true;
+    }
     for (const [dx, dz, d2] of this.offsets) {
       if (d2 > genR2) break;
-      if (!w.getChunk(pcx + dx, pcz + dz)) {
-        const c = w.generateChunk(pcx + dx, pcz + dz);
+      const cx = pcx + dx, cz = pcz + dz;
+      if (w.getChunk(cx, cz)) continue;
+      if (pool.failed) {
+        if (performance.now() - t0 > budget) break;
+        const c = w.generateChunk(cx, cz);
         if (c.fresh && this.state !== 'menu') this.spawnInitialAnimals(c);
         busy = true;
-        if (performance.now() - t0 > budget) break;
+      } else if (!pool.has(this.epoch, cx, cz)) {
+        if (pool.pending.size >= pool.capacity) break;
+        pool.request(this.epoch, w.seed, cx, cz);
+        busy = true;
       }
     }
     const t1 = performance.now();
@@ -333,12 +405,14 @@ export class Game {
       if (this.state === 'play' && p.alive) this.updatePlayer(dt);
       else if (p.alive) this.updatePlayerPassive(dt);
       if (this.state === 'play' && p.alive) this.interact(dt);
+      if (p.swing < 1) p.swing = Math.min(1, p.swing + dt * 3.4);
       else { this.mining = null; this.mouse.leftPressed = this.mouse.rightPressed = false; }
       this.tickAcc += dt;
       let n = 0;
       while (this.tickAcc >= TICK && n++ < 5) { this.tickAcc -= TICK; this.gameTick(); }
       for (const e of this.entities) e.update(dt, this);
       this.entities = this.entities.filter((e) => !e.dead);
+      this.torchEffects(dt);
       this.updateParticles(dt);
       this.processChecks();
       this.saveT += dt;
@@ -452,8 +526,27 @@ export class Game {
     }
     p.bobAmt += ((p.onGround && moved > 0.001 ? 1 : 0) - p.bobAmt) * Math.min(1, 8 * dt);
     p.fovBoost += ((p.sprinting ? 1 : 0) - p.fovBoost) * Math.min(1, 6 * dt);
+    this.animatePlayer(dt, moved);
     if (p.y < -64) this.damagePlayer(4, null, 'fell out of the world');
     this.survival(dt, liquid);
+  }
+
+  // Third-person body animation: legs/arms swing with distance walked, and the
+  // body turns toward the walking direction but never more than ~50° from the head.
+  animatePlayer(dt, moved) {
+    const p = this.player;
+    const speed = moved / Math.max(dt, 1e-4);
+    p.limbPhase += moved * 2.4;
+    const target = p.flying ? Math.min(0.4, speed / 20) : Math.min(1, speed / 4.3);
+    p.limbAmt += (target - p.limbAmt) * Math.min(1, 10 * dt);
+    if (speed > 0.6) {
+      let my = Math.atan2(-p.vx, -p.vz);
+      if (Math.abs(angleDiff(my, p.yaw)) > Math.PI / 2) my += Math.PI;
+      p.bodyYaw += angleDiff(my, p.bodyYaw) * Math.min(1, 7 * dt);
+    }
+    const d = angleDiff(p.yaw, p.bodyYaw), lim = 0.87;
+    if (d > lim) p.bodyYaw = p.yaw - lim;
+    else if (d < -lim) p.bodyYaw = p.yaw + lim;
   }
 
   survival(dt, liquid) {
@@ -759,6 +852,7 @@ export class Game {
       for (const e of this.entities) if (e instanceof Mob && e.health > 0 && overlap(e)) return;
     }
     let meta = 0;
+    if (LOG[held.id]) meta = hit.nx ? 1 : hit.nz ? 2 : 0;
     if (bd.support === 'torch') {
       const support = w.getBlock(hit.x, hit.y, hit.z);
       if (hit.ny === 1 && OPAQUE[support]) meta = 0;
@@ -782,8 +876,13 @@ export class Game {
     const w = this.world, d = BLOCKS[id];
     const below = w.getBlock(x, y - 1, z);
     switch (d.support) {
-      case 'plant': return below === B.GRASS || below === B.DIRT || below === B.SNOWY_GRASS;
-      case 'desert': return below === B.SAND || below === B.GRASS || below === B.DIRT;
+      case 'plant': return below === B.GRASS || below === B.DIRT || below === B.SNOWY_GRASS || below === B.PODZOL;
+      case 'desert': return below === B.SAND || below === B.RED_SAND || below === B.GRASS || below === B.DIRT || below === B.TERRACOTTA;
+      case 'cane': {
+        if (below === B.SUGAR_CANE) return true;
+        if (below !== B.GRASS && below !== B.DIRT && below !== B.SAND && below !== B.RED_SAND && below !== B.PODZOL) return false;
+        return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => w.getBlock(x + dx, y - 1, z + dz) === B.WATER);
+      }
       case 'cactus': return below === B.SAND || below === B.CACTUS;
       case 'torch': {
         if (!meta) return !!OPAQUE[below];
@@ -903,6 +1002,15 @@ export class Game {
       for (let k = 0; k < 20; k++) {
         const i = (rand() * 32768) | 0;
         const id = c.blocks[i];
+        if (id === B.SUGAR_CANE) {
+          if (rand() < 0.15 && i + 256 < 32768 && c.blocks[i + 256] === 0) {
+            const x = c.cx * 16 + (i & 15), y = i >> 8, z = c.cz * 16 + ((i >> 4) & 15);
+            let h = 1;
+            while (h < 4 && w.getBlock(x, y - h, z) === B.SUGAR_CANE) h++;
+            if (h < 3) w.setBlock(x, y + 1, z, B.SUGAR_CANE);
+          }
+          continue;
+        }
         if (id !== B.GRASS && id !== B.DIRT && id !== B.OAK_SAPLING && id !== B.BIRCH_SAPLING && id !== B.SPRUCE_SAPLING) continue;
         const x = c.cx * 16 + (i & 15), y = i >> 8, z = c.cz * 16 + ((i >> 4) & 15);
         const above = y < CH - 1 ? c.blocks[i + 256] : 0;
@@ -925,10 +1033,10 @@ export class Game {
     }
     const type = id === B.BIRCH_SAPLING ? 'birch' : id === B.SPRUCE_SAPLING ? 'spruce' : 'oak';
     w.setBlock(x, y, z, 0);
-    placeTree((tx, ty, tz, bid, onlyAir) => {
+    placeTree((tx, ty, tz, bid, onlyAir, meta = 0) => {
       const cur = w.getBlock(tx, ty, tz);
       if (onlyAir && cur !== 0 && !REPLACEABLE[cur]) return;
-      w.setBlock(tx, ty, tz, bid);
+      w.setBlock(tx, ty, tz, bid, meta);
     }, x, y, z, type, rand());
   }
 
@@ -1039,6 +1147,41 @@ export class Game {
       });
     }
   }
+  // Small flames and smoke rising from torches near the player.
+  torchEffects(dt) {
+    const p = this.player, w = this.world;
+    this.torchScanT = (this.torchScanT || 0) - dt;
+    if (this.torchScanT <= 0) {
+      this.torchScanT = 2;
+      const list = [];
+      const pcx = Math.floor(p.x / 16), pcz = Math.floor(p.z / 16);
+      const y0 = Math.max(0, Math.floor(p.y) - 20), y1 = Math.min(CH - 1, Math.floor(p.y) + 20);
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        const c = w.getChunk(pcx + dx, pcz + dz);
+        if (!c) continue;
+        for (let i = y0 << 8; i < (y1 + 1) << 8; i++) {
+          if (c.blocks[i] === B.TORCH) list.push([c.cx * 16 + (i & 15), i >> 8, c.cz * 16 + ((i >> 4) & 15), c.meta[i]]);
+        }
+      }
+      this.torches = list;
+    }
+    if (!this.torches || !this.torches.length) return;
+    this.flameT = (this.flameT || 0) - dt;
+    while (this.flameT <= 0) {
+      this.flameT += 0.6 / this.torches.length + 0.02;
+      const [x, y, z, m] = this.torches[Math.floor(rand() * this.torches.length)];
+      if (w.getBlock(x, y, z) !== B.TORCH) continue;
+      const off = [null, [-1, 0], [1, 0], [0, -1], [0, 1]][m] || [0, 0];
+      const tx = x + 0.5 + off[0] * 0.08, ty = y + (m ? 0.86 : 0.66), tz = z + 0.5 + off[1] * 0.08;
+      const smoke = rand() < 0.4;
+      this.particles.push({
+        x: tx + (rand() - 0.5) * 0.04, y: ty, z: tz + (rand() - 0.5) * 0.04, vx: 0, vy: smoke ? 0.5 : 0.08, vz: 0,
+        life: smoke ? 1 + rand() * 0.6 : 0.35, size: smoke ? 0.045 : 0.035, layer: LAYERS[smoke ? 'white' : 'flame'],
+        u: 0, v: 0, uvs: 1, tint: smoke ? [70, 70, 70] : [255, 255, 255], bright: 255, light: [255, 255], grav: smoke ? -0.3 : 0, glow: !smoke,
+      });
+    }
+  }
+
   updateParticles(dt) {
     const w = this.world;
     for (const p of this.particles) {
@@ -1047,6 +1190,7 @@ export class Game {
       const nx = p.x + p.vx * dt, ny = p.y + p.vy * dt, nz = p.z + p.vz * dt;
       if (w.isSolid(Math.floor(nx), Math.floor(ny), Math.floor(nz))) { p.vx *= 0.3; p.vz *= 0.3; p.vy = 0; }
       else { p.x = nx; p.y = ny; p.z = nz; }
+      if (p.glow) continue;
       const L = w.getLight(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
       p.light = [(L >> 4) * 17, (L & 15) * 17];
     }
@@ -1115,17 +1259,36 @@ export class Game {
       for (const d of e.draws(this, cam)) ents.push(d);
     }
     if (this.cameraMode !== 0 && this.state !== 'menu' && p.alive) {
+      const held = p.held();
       for (const d of poseDraws(this, cam, 'player', p, {
-        yaw: p.yaw, headPitch: -p.pitch, phase: p.bobPhase * 1.4, amount: p.bobAmt,
-        swing: -Math.sin(Math.min(1, p.swing) * Math.PI) * 1.2, color: p.hurtT > 0 ? [1, 0.5, 0.5, 1] : null,
+        bodyYaw: p.bodyYaw, headYaw: angleDiff(p.yaw, p.bodyYaw), headPitch: p.pitch,
+        phase: p.limbPhase, amount: p.limbAmt, swing: p.swing, sneak: p.sneaking,
+        held: held ? held.id : null, color: p.hurtT > 0 ? [1, 0.5, 0.5, 1] : null,
       })) ents.push(d);
     }
+    const shadows = [];
+    const addShadow = (e, r) => {
+      const bx = Math.floor(e.x), bz = Math.floor(e.z);
+      for (let by = Math.floor(e.y + 0.01); by > e.y - 4; by--) {
+        if (SOLID[w.getBlock(bx, by - 1, bz)] && !SOLID[w.getBlock(bx, by, bz)]) {
+          const a = 0.55 * (1 - (e.y - by) / 4);
+          if (a > 0.02) shadows.push({ x: e.x, y: by, z: e.z, r, a });
+          return;
+        }
+      }
+    };
+    for (const e of this.entities) {
+      if (Math.abs(e.x - p.x) > 40 || Math.abs(e.z - p.z) > 40) continue;
+      if (e instanceof Mob) addShadow(e, e.w * 1.5);
+      else if (e instanceof ItemEntity) addShadow(e, 0.45);
+    }
+    if (this.cameraMode !== 0 && this.state !== 'menu' && p.alive) addShadow(p, 0.9);
     this.cloudOffset += dt * 1.2;
     const L = w.getLight(Math.floor(p.x), Math.floor(p.y + p.eye), Math.floor(p.z));
     const frame = {
       cam, far, fog, daylight: this.daylight, time: this.time, gamma: this.settings.gamma,
       sky: { sunDir: sky.sunDir, top: sky.top, horizon: sky.horizon, sunset: sky.sunset, night: sky.night, starRot: sky.starRot },
-      chunks: this.chunkList || [], entities: ents, particles: this.particles,
+      chunks: this.chunkList || [], entities: ents, particles: this.particles, shadows,
       selection: this.state === 'play' && this.target && !this.hudHidden ? this.target : null,
       crack: this.mining && this.mining.progress > 0 ? { x: this.mining.x, y: this.mining.y, z: this.mining.z, stage: Math.floor(this.mining.progress * 10) } : null,
       clouds: this.settings.clouds ? { offset: this.cloudOffset, color: sky.cloud } : null,
@@ -1137,7 +1300,6 @@ export class Game {
 
   handState(dt, light) {
     const p = this.player, M = this.M;
-    if (p.swing < 1) p.swing = Math.min(1, p.swing + dt * 3.2);
     this.equip = Math.max(0, this.equip - dt * 5);
     const held = p.held();
     const s = p.swing < 1 ? p.swing : 0;
@@ -1148,7 +1310,7 @@ export class Game {
     const drop = this.equip * 0.4;
     M.identity();
     if (!held) {
-      if (!this.armMesh) this.armMesh = this.renderer.upload(boxMesh(-2, -12, -2, 4, 12, 4, [L('player_skin'), L('player_skin'), L('player_jacket'), L('player_skin'), L('player_skin'), L('player_skin')]));
+      if (!this.armMesh) this.armMesh = this.renderer.upload(boxMesh(-2, -12, -2, 4, 12, 4, ['wd_arm_side', 'wd_arm_inner', 'wd_arm_top', 'wd_arm_bottom', 'wd_arm_inner', 'wd_arm_inner'].map(L)));
       M.translate(0.5 + bx - sw2 * 0.2, -0.5 + by - drop + sw * 0.12, -0.12 - sw2 * 0.12)
         .rotateY(0.36 + sw2 * 0.35).rotateX(1.95 - sw * 0.5).rotateZ(-0.1).scale(0.045);
       return { mesh: this.armMesh, model: M.m, light };
@@ -1159,8 +1321,8 @@ export class Game {
         .rotateX(-sw * 0.6).rotateY(0.78 - sw2 * 0.3).scale(0.36);
       return { mesh: m.mesh, model: M.m, light };
     }
-    M.translate(0.5 + bx - sw2 * 0.25, -0.34 + by - drop + sw * 0.1 + eat, -0.66 - sw2 * 0.1)
-      .rotateY(-1.15).rotateZ(0.25 + sw * 0.9).rotateX(-sw2 * 0.25).scale(0.62);
+    M.translate(0.54 + bx - sw2 * 0.25, -0.4 + by - drop + sw * 0.1 + eat, -0.72 - sw2 * 0.1)
+      .rotateY(-1.15).rotateZ(0.25 + sw * 0.9).rotateX(-sw2 * 0.25).scale(0.5);
     return { mesh: m.mesh, model: M.m, light, noCull: true };
   }
 

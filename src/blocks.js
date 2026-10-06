@@ -85,6 +85,26 @@ export const WOOL_COLORS = [
 ];
 for (const [k, n] of WOOL_COLORS) blk(`WOOL_${k}`, `${n} Wool`, { tex: `wool_${k.toLowerCase()}`, hardness: 0.8, sound: 'wool' });
 
+// ---- Added in the terrain update (appended so saved block ids stay valid) ----
+blk('RED_SAND', 'Red Sand', { tex: 'red_sand', hardness: 0.5, tool: 'shovel', sound: 'sand', gravity: true });
+export const TERRACOTTA_COLORS = [
+  ['', 'Terracotta', [152, 94, 68]], ['ORANGE', 'Orange Terracotta', [162, 84, 38]],
+  ['YELLOW', 'Yellow Terracotta', [186, 133, 36]], ['WHITE', 'White Terracotta', [210, 178, 161]],
+  ['BROWN', 'Brown Terracotta', [77, 51, 36]], ['RED', 'Red Terracotta', [143, 61, 47]],
+];
+for (const [k, n] of TERRACOTTA_COLORS) blk(k ? `TERRACOTTA_${k}` : 'TERRACOTTA', n, { tex: k ? `terracotta_${k.toLowerCase()}` : 'terracotta', hardness: 1.25, tool: 'pickaxe', tier: 1 });
+blk('ACACIA_LOG', 'Acacia Log', { tex: { top: 'log_acacia_top', side: 'log_acacia' }, hardness: 2, tool: 'axe', sound: 'wood', fuel: 15 });
+blk('ACACIA_LEAVES', 'Acacia Leaves', { tex: 'leaves_acacia', render: R.CUTOUT, opaque: false, filter: 1, hardness: 0.2, sound: 'grass', tint: 3, drop: 'leaves', leaf: true });
+blk('ACACIA_PLANKS', 'Acacia Planks', { tex: 'planks_acacia', hardness: 2, tool: 'axe', sound: 'wood', fuel: 15 });
+blk('PODZOL', 'Podzol', { tex: { top: 'podzol_top', side: 'podzol_side', bottom: 'dirt' }, hardness: 0.5, tool: 'shovel', drop: 'DIRT', sound: 'gravel' });
+blk('PUMPKIN', 'Pumpkin', { tex: { top: 'pumpkin_top', side: 'pumpkin_side', front: 'pumpkin_side' }, front: true, hardness: 1, tool: 'axe', sound: 'wood' });
+blk('JACK_O_LANTERN', "Jack o'Lantern", { tex: { top: 'pumpkin_top', side: 'pumpkin_side', front: 'pumpkin_face' }, front: true, light: 15, hardness: 1, tool: 'axe', sound: 'wood' });
+blk('SUGAR_CANE', 'Sugar Cane', { tex: 'sugar_cane', render: R.CROSS, solid: false, opaque: false, hardness: 0, sound: 'grass', support: 'cane' });
+blk('FERN', 'Fern', { tex: 'fern', render: R.CROSS, solid: false, opaque: false, hardness: 0, sound: 'grass', support: 'plant', tint: 2, replaceable: true, drop: null });
+blk('CORNFLOWER', 'Cornflower', { tex: 'cornflower', render: R.CROSS, solid: false, opaque: false, hardness: 0, sound: 'grass', support: 'plant' });
+blk('DAISY', 'Daisy', { tex: 'daisy', render: R.CROSS, solid: false, opaque: false, hardness: 0, sound: 'grass', support: 'plant' });
+for (const k of ['LOG', 'BIRCH_LOG', 'SPRUCE_LOG', 'ACACIA_LOG']) BLOCKS[B[k]].log = true;
+
 // ---- Items (ids from 256) ----
 let nextItem = 256;
 function itm(key, name, o = {}) {
@@ -121,6 +141,8 @@ itm('ROTTEN_FLESH', 'Rotten Flesh', { food: 2 });
 itm('BUCKET', 'Bucket', { maxStack: 16 });
 itm('WATER_BUCKET', 'Water Bucket', { maxStack: 1 });
 itm('LAVA_BUCKET', 'Lava Bucket', { maxStack: 1, fuel: 1000 });
+itm('SUGAR', 'Sugar', { food: 1 });
+itm('PUMPKIN_PIE', 'Pumpkin Pie', { food: 8 });
 
 // Resolve string drops to ids.
 for (const d of BLOCKS) {
@@ -137,6 +159,7 @@ export const TINT = new Uint8Array(256);
 export const CULLSAME = new Uint8Array(256);
 export const LIQUID = new Uint8Array(256);
 export const LEAF = new Uint8Array(256);
+export const LOG = new Uint8Array(256);
 export const TARGET = new Uint8Array(256);
 export const REPLACEABLE = new Uint8Array(256);
 for (const d of BLOCKS) {
@@ -149,6 +172,7 @@ for (const d of BLOCKS) {
   CULLSAME[d.id] = d.cullSame ? 1 : 0;
   LIQUID[d.id] = d.liquid;
   LEAF[d.id] = d.leaf ? 1 : 0;
+  LOG[d.id] = d.log ? 1 : 0;
   TARGET[d.id] = d.render !== R.NONE && !d.liquid ? 1 : 0;
   REPLACEABLE[d.id] = d.replaceable ? 1 : 0;
 }
