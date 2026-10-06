@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Blockhaven</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" hidden>
+  <div id="tint"></div>
+  <div id="vignette"></div>
+  <div id="crosshair"></div>
+  <pre id="debug" hidden></pre>
+  <div id="chat">
+    <div id="chat-log"></div>
+    <input id="chat-input" type="text" autocomplete="off" spellcheck="false" maxlength="200" placeholder="Type a message or /help" hidden>
+  </div>
+  <div id="bottom">
+    <div id="itemname"></div>
+    <div id="stats">
+      <div id="hearts" class="iconrow"></div>
+      <div id="right-stats">
+        <div id="air" class="iconrow"></div>
+        <div id="food" class="iconrow"></div>
+      </div>
+    </div>
+    <div id="hotbar"></div>
+  </div>
+</div>
+
+<div id="inventory" class="overlay" hidden>
+  <div class="panel inv-panel" id="inv-panel">
+    <div id="inv-top"></div>
+    <div class="inv-label">Inventory</div>
+    <div id="inv-main" class="grid9"></div>
+    <div id="inv-hot" class="grid9 hot"></div>
+  </div>
+  <div id="cursor-stack" class="slot ghost"></div>
+  <div id="tooltip" hidden></div>
+</div>
+
+<section id="menu-main" class="screen" hidden>
+  <div class="title-block">
+    <h1 class="logo" aria-label="Blockhaven"><span>BLOCK</span><span>HAVEN</span></h1>
+    <p class="tagline">An endless voxel world, generated in your browser.</p>
+  </div>
+  <div class="menu-buttons">
+    <button id="btn-play" class="btn primary">Play</button>
+    <button id="btn-settings-main" class="btn">Settings</button>
+    <button id="btn-controls" class="btn">Controls</button>
+  </div>
+  <p class="foot">Survival and creative modes · caves, biomes, mobs, crafting · saves locally</p>
+</section>
+
+<section id="menu-worlds" class="screen" hidden>
+  <div class="panel menu-panel">
+    <h2>Your worlds</h2>
+    <div id="world-list"></div>
+    <div class="row">
+      <button id="btn-new-world" class="btn primary">Create new world</button>
+      <button id="btn-worlds-back" class="btn">Back</button>
+    </div>
+  </div>
+</section>
+
+<section id="menu-create" class="screen" hidden>
+  <form class="panel menu-panel" id="create-form">
+    <h2>Create a world</h2>
+    <label class="field">World name<input id="new-name" type="text" maxlength="32" value="New World"></label>
+    <label class="field">Seed <small>(blank for random)</small><input id="new-seed" type="text" maxlength="24" placeholder="e.g. 8471 or mountains"></label>
+    <div class="field">Game mode
+      <div class="seg" id="mode-seg" role="radiogroup">
+        <button type="button" class="seg-btn on" data-mode="survival" role="radio" aria-checked="true">Survival</button>
+        <button type="button" class="seg-btn" data-mode="creative" role="radio" aria-checked="false">Creative</button>
+      </div>
+      <small id="mode-desc">Gather resources, craft tools, keep fed and survive the nights.</small>
+    </div>
+    <div class="row">
+      <button type="submit" class="btn primary">Create world</button>
+      <button type="button" id="btn-create-cancel" class="btn">Cancel</button>
+    </div>
+  </form>
+</section>
+
+<section id="menu-pause" class="screen dim" hidden>
+  <div class="panel menu-panel">
+    <h2>Paused</h2>
+    <button id="btn-resume" class="btn primary">Back to game</button>
+    <button id="btn-settings-pause" class="btn">Settings</button>
+    <button id="btn-controls-pause" class="btn">Controls</button>
+    <button id="btn-quit" class="btn">Save and quit to title</button>
+  </div>
+</section>
+
+<section id="menu-controls" class="screen dim" hidden>
+  <div class="panel menu-panel wide">
+    <h2>Controls</h2>
+    <dl class="keys">
+      <dt>W A S D</dt><dd>Move</dd>
+      <dt>Mouse</dt><dd>Look around</dd>
+      <dt>Left click</dt><dd>Mine block · attack</dd>
+      <dt>Right click</dt><dd>Place block · use · eat (hold)</dd>
+      <dt>Middle click</dt><dd>Pick block</dd>
+      <dt>Space</dt><dd>Jump · swim up · double-tap to fly (creative)</dd>
+      <dt>Shift</dt><dd>Sneak (won't fall off edges) · fly down</dd>
+      <dt>Ctrl or double-tap W</dt><dd>Sprint</dd>
+      <dt>1–9 · scroll</dt><dd>Choose hotbar slot</dd>
+      <dt>E</dt><dd>Inventory and crafting</dd>
+      <dt>Q</dt><dd>Drop item (Ctrl+Q drops the stack)</dd>
+      <dt>T or /</dt><dd>Chat and commands (/help)</dd>
+      <dt>F1 · F3 · F5</dt><dd>Hide HUD · debug info · camera view</dd>
+    </dl>
+    <p class="hint">Getting started: punch a tree for logs, turn them into planks in your inventory, make a crafting table, then sticks and a wooden pickaxe. Torches need coal and sticks. Ghouls come out in the dark.</p>
+    <button id="btn-controls-back" class="btn primary">Done</button>
+  </div>
+</section>
+
+<section id="menu-settings" class="screen dim" hidden>
+  <div class="panel menu-panel wide">
+    <h2>Settings</h2>
+    <div class="settings-grid">
+      <label class="slider">Render distance <output id="out-renderDist"></output><input id="set-renderDist" type="range" min="3" max="16" step="1"></label>
+      <label class="slider">Field of view <output id="out-fov"></output><input id="set-fov" type="range" min="50" max="110" step="1"></label>
+      <label class="slider">Mouse sensitivity <output id="out-sensitivity"></output><input id="set-sensitivity" type="range" min="0.2" max="3" step="0.05"></label>
+      <label class="slider">Brightness <output id="out-gamma"></output><input id="set-gamma" type="range" min="0.5" max="1.2" step="0.05"></label>
+      <label class="slider">Music <output id="out-music"></output><input id="set-music" type="range" min="0" max="1" step="0.05"></label>
+      <label class="slider">Sound effects <output id="out-sfx"></output><input id="set-sfx" type="range" min="0" max="1" step="0.05"></label>
+      <label class="slider">Resolution <output id="out-scale"></output><input id="set-scale" type="range" min="0.4" max="1" step="0.05"></label>
+      <div class="toggles">
+        <label class="toggle"><input id="set-bob" type="checkbox"> View bobbing</label>
+        <label class="toggle"><input id="set-fancyLeaves" type="checkbox"> Fancy leaves</label>
+        <label class="toggle"><input id="set-clouds" type="checkbox"> Clouds</label>
+        <label class="toggle"><input id="set-invertY" type="checkbox"> Invert mouse</label>
+      </div>
+    </div>
+    <button id="btn-settings-done" class="btn primary">Done</button>
+  </div>
+</section>
+
+<section id="menu-death" class="screen death" hidden>
+  <div class="menu-panel bare">
+    <h2 class="died">You died</h2>
+    <p id="death-cause"></p>
+    <button id="btn-respawn" class="btn primary">Respawn</button>
+    <button id="btn-death-title" class="btn">Title screen</button>
+  </div>
+</section>
+
+<section id="loading" class="screen solid" hidden>
+  <div class="menu-panel bare">
+    <h2 id="loading-title">Generating terrain</h2>
+    <div class="bar"><div id="loading-bar"></div></div>
+    <p id="loading-tip" class="hint"></p>
+  </div>
+</section>
+
+<div id="clicktoplay" hidden><div class="panel"><strong>Click to keep playing</strong><span>Press Esc for the menu</span></div></div>
+<div id="touch" hidden>
+  <div id="stick"><div id="stick-knob"></div></div>
+  <div id="touch-buttons">
+    <button class="tbtn" id="t-jump" aria-label="Jump">▲</button>
+    <button class="tbtn" id="t-sneak" aria-label="Sneak">▼</button>
+    <button class="tbtn" id="t-sprint" aria-label="Sprint">»</button>
+  </div>
+  <div id="touch-top">
+    <button class="tbtn small" id="t-inv" aria-label="Inventory">☰</button>
+    <button class="tbtn small" id="t-drop" aria-label="Drop item">⇣</button>
+    <button class="tbtn small" id="t-pause" aria-label="Pause">II</button>
+  </div>
+</div>
+<div id="fatal" hidden></div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
