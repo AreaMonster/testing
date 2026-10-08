@@ -204,7 +204,7 @@ export class UI {
       });
     }
     this.fmt = fmt;
-    for (const k of ['bob', 'fancyLeaves', 'clouds', 'invertY']) {
+    for (const k of ['bob', 'fancyLeaves', 'clouds', 'invertY', 'post']) {
       $(`set-${k}`).addEventListener('change', (e) => { g.settings[k] = e.target.checked; g.applySettings(); });
     }
   }
@@ -215,7 +215,7 @@ export class UI {
       $(`set-${k}`).value = s[k];
       $(`out-${k}`).textContent = this.fmt[k](s[k]);
     }
-    for (const k of ['bob', 'fancyLeaves', 'clouds', 'invertY']) $(`set-${k}`).checked = !!s[k];
+    for (const k of ['bob', 'fancyLeaves', 'clouds', 'invertY', 'post']) $(`set-${k}`).checked = !!s[k];
   }
 
   renderWorlds() {
@@ -371,6 +371,13 @@ export class UI {
     const now = performance.now();
     for (const l of this.lines) if (!l.faded && now - l.t > 9000) { l.faded = true; l.el.classList.add('faded'); }
     if (this.inv) this.refreshInventory();
+  }
+
+  sleepFade() {
+    const el = $('sleep-fade');
+    el.classList.remove('on');
+    void el.offsetWidth;
+    el.classList.add('on');
   }
 
   chat(msg, kind) {

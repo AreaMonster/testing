@@ -1,5 +1,7 @@
 // Chunk storage, block access, flood-fill lighting and fluid simulation.
-import { B, BLOCKS, OPAQUE, FILTER, EMIT, LIQUID, REPLACEABLE } from './blocks.js';
+import { B, BLOCKS, OPAQUE, SOLID, FILTER, EMIT, LIQUID, REPLACEABLE, SHAPE, blockSpan } from './blocks.js';
+
+const FULL = [0, 1];
 import { CS, CH } from './consts.js';
 
 export const idx = (x, y, z) => (y << 8) | (z << 4) | x;
@@ -71,14 +73,48 @@ export class World {
     if (!c) return true;
     return BLOCKS[c.blocks[idx(x & 15, y, z & 15)]].solid;
   }
+  // Vertical extent of a solid block, or null for passable cells.
+  solidSpan(x, y, z) {
+    if (y < 0) return FULL;
+    if (y >= CH) return null;
+    const c = this.getChunk(x >> 4, z >> 4);
+    if (!c) return FULL;
+    const i = idx(x & 15, y, z & 15), id = c.blocks[i];
+    if (!SOLID[id]) return null;
+    return SHAPE[id] ? blockSpan(id, c.meta[i]) : FULL;
+  }
+  // Highest non-air block in a column (cached per chunk; used for rain).
+  topAt(x, z) {
+    const c = this.getChunk(x >> 4, z >> 4);
+    if (!c) return -1;
+    if (!c.heights || c.hdirty) {
+      const h = c.heights || (c.heights = new Int16Array(256));
+      for (let i = 0; i < 256; i++) {
+        let y = CH - 1;
+        while (y >= 0 && c.blocks[(y << 8) | i] === 0) y--;
+        h[i] = y;
+      }
+      c.hdirty = false;
+    }
+    return c.heights[((z & 15) << 4) | (x & 15)];
+  }
   isLoaded(x, z) {
     return !!this.getChunk(x >> 4, z >> 4);
   }
 
   // ---------- chunk lifecycle ----------
   generateChunk(cx, cz) {
+    const data = { blocks: new Uint8Array(CS * CS * CH), meta: new Uint8Array(CS * CS * CH), tint: new Uint8Array(768) };
+    this.gen.generate({ cx, cz, ...data });
+    return this.insertChunkData(cx, cz, data);
+  }
+
+  // Adopts generated arrays (from a worker or generateChunk), applies saved edits and lights it.
+  insertChunkData(cx, cz, data) {
     const c = new Chunk(cx, cz);
-    this.gen.generate(c);
+    c.blocks = data.blocks;
+    c.meta = data.meta;
+    c.tint = data.tint;
     const mods = this.store && this.store.loadMods(cx, cz);
     if (mods) {
       for (let i = 0; i < mods.length; i += 2) {
@@ -272,6 +308,7 @@ export class World {
     c.meta[i] = meta;
     c.mods.set(i, id | (meta << 8));
     c.unsaved = true;
+    c.hdirty = true;
     if (old !== id) this.updateLight(x, y, z, old, id);
     this.markLightDirty(c, x & 15, z & 15);
     if (LIQUID[id]) this.scheduleFluid(x, y, z);

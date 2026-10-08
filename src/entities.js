@@ -107,60 +107,84 @@ export class FallingBlock extends Entity {
   }
 }
 
-// ---------- Mob definitions (sizes in model pixels, 16 px = 1 block) ----------
-const faceLayers = (all, front, top, back) => [all, all, top || all, all, back || all, front || all];
-const quad = (x, y, z, layers) => ({ pivot: [x, y, z], box: [-2, -12, -2, 4, 12, 4], layers });
-const legs4 = (dx, dz, y, h, layer) => ['fl', 'fr', 'bl', 'br'].map((n, i) => ({
-  name: n, pivot: [(i % 2 ? 1 : -1) * dx, y, (i < 2 ? -1 : 1) * dz], box: [-2, -h, -2, 4, h, 4], layers: layer,
-}));
-const humanoid = (head, body, arm, leg) => [
-  { name: 'head', pivot: [0, 24, 0], box: [-4, 0, -4, 8, 8, 8], layers: head },
-  { name: 'body', pivot: [0, 12, 0], box: [-4, 0, -2, 8, 12, 4], layers: body },
-  { name: 'ar', pivot: [-6, 22, 0], box: [-2, -10, -2, 4, 12, 4], layers: arm },
-  { name: 'al', pivot: [6, 22, 0], box: [-2, -10, -2, 4, 12, 4], layers: arm },
-  { name: 'fl', ...quad(-2, 12, 0, leg) },
-  { name: 'fr', ...quad(2, 12, 0, leg) },
-];
+// ---------- Models (sizes in model pixels, 16 px = 1 block) ----------
+// Each part has a pivot (in its parent's space) and a box relative to that pivot.
+// Face order matches boxMesh: [right(+x), left(-x), top, bottom, back(+z), front(-z)].
+// Models face -Z, so a character's right side is +X.
+function L(name) { return LAYERS[name]; }
+const F = (right, left, top, bottom, back, front) => [right, left, top, bottom, back, front];
+const all = (n) => F(n, n, n, n, n, n);
+
+function humanoid(p) {
+  return [
+    { name: 'body', pivot: [0, 12, 0], box: [-4, 0, -2, 8, 12, 4], faces: F(p.bodyR, p.bodyL, p.bodyTop, p.bodyBottom, p.bodyBack, p.bodyFront) },
+    { name: 'head', parent: 'body', pivot: [0, 12, 0], box: [-4, 0, -4, 8, 8, 8], faces: F(p.headR, p.headL, p.headTop, p.headBottom, p.headBack, p.headFront) },
+    { name: 'armR', parent: 'body', pivot: [6, 10, 0], box: [-2, -10, -2, 4, 12, 4], faces: F(p.armOut, p.armIn, p.armTop, p.armBottom, p.armIn, p.armIn) },
+    { name: 'armL', parent: 'body', pivot: [-6, 10, 0], box: [-2, -10, -2, 4, 12, 4], faces: F(p.armIn, p.armOut, p.armTop, p.armBottom, p.armIn, p.armIn) },
+    { name: 'legR', pivot: [2, 12, 0], box: [-2, -12, -2, 4, 12, 4], faces: F(p.leg, p.leg, p.legTop, p.legBottom, p.leg, p.leg) },
+    { name: 'legL', pivot: [-2, 12, 0], box: [-2, -12, -2, 4, 12, 4], faces: F(p.leg, p.leg, p.legTop, p.legBottom, p.leg, p.leg) },
+  ];
+}
+const quadLegs = (dx, dzF, dzB, y, h, layer) => [
+  ['legFR', dx, -dzF], ['legFL', -dx, -dzF], ['legBR', dx, dzB], ['legBL', -dx, dzB],
+].map(([name, x, z]) => ({ name, pivot: [x, y, z], box: [-2, -h, -2, 4, h, 4], faces: all(layer) }));
 
 export const MOB_TYPES = {
   pig: {
-    name: 'Pig', w: 0.85, h: 0.9, health: 10, speed: 1.4, scale: 1 / 16,
+    name: 'Pig', w: 0.85, h: 0.9, health: 10, speed: 1.4, scale: 1 / 16, quad: true,
     parts: () => [
-      { name: 'body', pivot: [0, 6, 0], box: [-5, 0, -8, 10, 8, 16], layers: L('pig_skin') },
-      { name: 'head', pivot: [0, 10, -8], box: [-4, -4, -8, 8, 8, 8], layers: faceLayers(L('pig_skin'), L('pig_face')) },
-      ...legs4(3, 5, 6, 6, L('pig_skin')),
+      { name: 'body', pivot: [0, 6, 0], box: [-5, 0, -8, 10, 8, 16], faces: all('pig_skin') },
+      { name: 'head', parent: 'body', pivot: [0, 4, -8], box: [-4, -4, -8, 8, 8, 8], faces: F('pig_skin', 'pig_skin', 'pig_skin', 'pig_skin', 'pig_skin', 'pig_head_front') },
+      { name: 'snout', parent: 'head', pivot: [0, 0, 0], box: [-2, -3, -9, 4, 3, 1], faces: F('pig_skin', 'pig_skin', 'pig_skin', 'pig_skin', 'pig_skin', 'pig_snout') },
+      { name: 'earR', parent: 'head', pivot: [0, 0, 0], box: [2, 3, -5, 2, 2, 1], faces: all('pig_skin') },
+      { name: 'earL', parent: 'head', pivot: [0, 0, 0], box: [-4, 3, -5, 2, 2, 1], faces: all('pig_skin') },
+      ...quadLegs(3, 5, 5, 6, 6, 'pig_leg'),
     ],
     drops: () => [[I.RAW_PORK, 1 + Math.floor(rand() * 3)]],
   },
   cow: {
-    name: 'Cow', w: 0.9, h: 1.4, health: 10, speed: 1.2, scale: 1 / 16,
+    name: 'Cow', w: 0.9, h: 1.4, health: 10, speed: 1.2, scale: 1 / 16, quad: true,
     parts: () => [
-      { name: 'body', pivot: [0, 12, 0], box: [-6, 0, -9, 12, 10, 18], layers: L('cow_skin') },
-      { name: 'head', pivot: [0, 19, -9], box: [-4, -4, -6, 8, 8, 6], layers: faceLayers(L('cow_skin'), L('cow_face')) },
-      ...legs4(4, 6, 12, 12, L('cow_skin')),
+      { name: 'body', pivot: [0, 12, 0], box: [-6, 0, -9, 12, 10, 18], faces: all('cow_skin') },
+      { name: 'head', parent: 'body', pivot: [0, 7, -9], box: [-4, -4, -6, 8, 8, 6], faces: F('cow_skin', 'cow_skin', 'cow_skin', 'cow_skin', 'cow_skin', 'cow_head_front') },
+      { name: 'muzzle', parent: 'head', pivot: [0, 0, 0], box: [-3, -4, -7, 6, 3, 1], faces: all('cow_muzzle') },
+      { name: 'hornR', parent: 'head', pivot: [0, 0, 0], box: [4, 2, -4, 2, 1, 1], faces: all('cow_horn') },
+      { name: 'hornL', parent: 'head', pivot: [0, 0, 0], box: [-6, 2, -4, 2, 1, 1], faces: all('cow_horn') },
+      { name: 'hornRt', parent: 'head', pivot: [0, 0, 0], box: [5, 3, -4, 1, 2, 1], faces: all('cow_horn') },
+      { name: 'hornLt', parent: 'head', pivot: [0, 0, 0], box: [-6, 3, -4, 1, 2, 1], faces: all('cow_horn') },
+      { name: 'udder', parent: 'body', pivot: [0, 0, 0], box: [-2, -1, 3, 4, 1, 4], faces: all('cow_udder') },
+      ...quadLegs(4, 6, 6, 12, 12, 'cow_leg'),
     ],
     drops: () => [[I.RAW_BEEF, 1 + Math.floor(rand() * 3)]],
   },
   sheep: {
-    name: 'Sheep', w: 0.9, h: 1.3, health: 8, speed: 1.3, scale: 1 / 16,
+    name: 'Sheep', w: 0.9, h: 1.3, health: 8, speed: 1.3, scale: 1 / 16, quad: true,
     parts: () => [
-      { name: 'body', pivot: [0, 12, 0], box: [-5, 0, -8, 10, 9, 16], layers: L('sheep_wool') },
-      { name: 'head', pivot: [0, 19, -8], box: [-3, -3, -6, 6, 6, 7], layers: faceLayers(L('sheep_skin'), L('sheep_face'), L('sheep_wool'), L('sheep_wool')) },
-      ...legs4(3, 5, 12, 12, L('sheep_skin')),
+      { name: 'body', pivot: [0, 12, 0], box: [-5, 0, -8, 10, 9, 16], faces: all('sheep_wool') },
+      { name: 'head', parent: 'body', pivot: [0, 7, -8], box: [-3, -3, -6, 6, 6, 6], faces: F('sheep_skin', 'sheep_skin', 'sheep_skin', 'sheep_skin', 'sheep_skin', 'sheep_face') },
+      { name: 'cap', parent: 'head', pivot: [0, 0, 0], box: [-3.5, 1, -5.5, 7, 3, 6], faces: all('sheep_wool') },
+      ...quadLegs(3, 5, 5, 12, 12, 'sheep_leg'),
     ],
     drops: () => [[B.WOOL_WHITE, 1 + Math.floor(rand() * 2)], [I.RAW_MUTTON, 1 + Math.floor(rand() * 2)]],
   },
   ghoul: {
     name: 'Ghoul', w: 0.6, h: 1.85, health: 20, speed: 2.4, scale: 0.058, hostile: true, damage: 3,
-    parts: () => humanoid(faceLayers(L('ghoul_skin'), L('ghoul_face')), L('ghoul_shirt'), L('ghoul_skin'), L('ghoul_pants')),
+    parts: () => humanoid({
+      bodyR: 'gh_body_side', bodyL: 'gh_body_side', bodyTop: 'gh_body_top', bodyBottom: 'gh_body_top', bodyBack: 'gh_body_back', bodyFront: 'gh_body_front',
+      headR: 'gh_head_side', headL: 'gh_head_side', headTop: 'gh_head_top', headBottom: 'gh_head_side', headBack: 'gh_head_back', headFront: 'gh_head_front',
+      armOut: 'gh_arm', armIn: 'gh_arm', armTop: 'gh_body_top', armBottom: 'gh_arm', leg: 'gh_leg', legTop: 'gh_leg', legBottom: 'gh_leg',
+    }),
     drops: () => (rand() < 0.8 ? [[I.ROTTEN_FLESH, 1 + Math.floor(rand() * 2)]] : []),
   },
   player: {
-    name: 'You', w: 0.6, h: 1.8, scale: 0.058,
-    parts: () => humanoid(faceLayers(L('player_skin'), L('player_face'), L('player_hair'), L('player_hair')), L('player_jacket'), L('player_jacket'), L('player_pants')),
+    name: 'You', w: 0.6, h: 1.8, scale: 0.056,
+    parts: () => humanoid({
+      bodyR: 'wd_body_side_bag', bodyL: 'wd_body_side', bodyTop: 'wd_body_top', bodyBottom: 'wd_body_bottom', bodyBack: 'wd_body_back', bodyFront: 'wd_body_front',
+      headR: 'wd_head_right', headL: 'wd_head_left', headTop: 'wd_head_top', headBottom: 'wd_head_bottom', headBack: 'wd_head_back', headFront: 'wd_head_front',
+      armOut: 'wd_arm_side', armIn: 'wd_arm_inner', armTop: 'wd_arm_top', armBottom: 'wd_arm_bottom', leg: 'wd_leg_side', legTop: 'wd_leg_top', legBottom: 'wd_leg_bottom',
+    }),
   },
 };
-function L(name) { return LAYERS[name]; }
 
 const partMeshes = new Map();
 export function mobParts(renderer, type) {
@@ -168,32 +192,56 @@ export function mobParts(renderer, type) {
   if (p) return p;
   p = MOB_TYPES[type].parts().map((part) => {
     const [x, y, z, w, h, d] = part.box;
-    return { ...part, mesh: renderer.upload(boxMesh(x, y, z, w, h, d, part.layers)) };
+    return { ...part, mesh: renderer.upload(boxMesh(x, y, z, w, h, d, part.faces.map(L))) };
   });
   partMeshes.set(type, p);
   return p;
 }
 
-// Shared pose renderer for mobs and the third-person player.
+const PM = new Map();
+const matFor = (name) => { let m = PM.get(name); if (!m) PM.set(name, (m = new Mat4())); return m; };
+
+// Builds draw calls for a posed model.
+// pose: { bodyYaw, headYaw (relative to body), headPitch, phase, amount, swing (0..1, 0 = idle),
+//         armsForward, sneak, tilt, color, held (item id), shadow }
 export function poseDraws(g, cam, type, e, pose) {
   const def = MOB_TYPES[type];
   const parts = mobParts(g.renderer, type);
   const light = e.lightAt(g.world);
   const out = [];
+  const sw = Math.sin(pose.phase) * pose.amount;
+  const lean = pose.sneak ? -0.45 : 0;
+  const s = pose.swing > 0 && pose.swing < 1 ? pose.swing : 0;
+  const attack = Math.sin(Math.sqrt(s) * Math.PI);
+  const root = matFor('root').identity().translate(e.x - cam.x, e.y - cam.y, e.z - cam.z).rotateY(pose.bodyYaw);
+  if (pose.tilt) root.rotateZ(pose.tilt);
+  root.scale(def.scale);
+  if (pose.sneak) root.translate(0, -2.5, 1.5);
   for (const part of parts) {
-    M.identity().translate(e.x - cam.x, e.y - cam.y, e.z - cam.z).rotateY(pose.yaw);
-    if (pose.tilt) M.rotateZ(pose.tilt);
-    M.scale(def.scale);
-    M.translate(part.pivot[0], part.pivot[1], part.pivot[2]);
-    const sw = Math.sin(pose.phase) * 0.7 * pose.amount;
+    const m = matFor(part.name).copy(part.parent ? matFor(part.parent) : root);
+    m.translate(part.pivot[0], part.pivot[1], part.pivot[2]);
     switch (part.name) {
-      case 'head': M.rotateY(pose.headYaw || 0).rotateX(pose.headPitch || 0); break;
-      case 'fl': case 'br': M.rotateX(sw); break;
-      case 'fr': case 'bl': M.rotateX(-sw); break;
-      case 'ar': M.rotateX(pose.armsUp ? -1.45 + sw * 0.15 : -sw + (pose.swing || 0)); break;
-      case 'al': M.rotateX(pose.armsUp ? -1.45 - sw * 0.15 : sw); break;
+      case 'body': if (lean) m.rotateX(lean); break;
+      case 'head': m.rotateY(pose.headYaw || 0).rotateX((pose.headPitch || 0) - lean); break;
+      case 'legR': case 'legFL': case 'legBR': m.rotateX(sw * 1.1); break;
+      case 'legL': case 'legFR': case 'legBL': m.rotateX(-sw * 1.1); break;
+      case 'armR':
+        if (pose.armsForward) m.rotateX(1.45 + sw * 0.12 + attack * 0.6);
+        else m.rotateX(-sw * 0.9 + (pose.held ? 0.32 : 0) + attack * 1.5 - lean * 0.6).rotateY(-attack * 0.35).rotateZ(0.06 + attack * 0.2);
+        break;
+      case 'armL':
+        if (pose.armsForward) m.rotateX(1.45 - sw * 0.12 + attack * 0.6);
+        else m.rotateX(sw * 0.9 - lean * 0.6).rotateZ(-0.06);
+        break;
     }
-    out.push({ mesh: part.mesh, model: M.m.slice(), light, color: pose.color });
+    out.push({ mesh: part.mesh, model: m.m.slice(), light, color: pose.color });
+  }
+  if (pose.held !== undefined && pose.held !== null) {
+    const im = g.renderer.itemMesh(pose.held);
+    const h = matFor('held').copy(matFor('armR')).translate(0, -9.5, -1);
+    if (im.flat) h.rotateX(-Math.PI / 4 + 0.35).rotateY(Math.PI / 2).scale(10).translate(0.5, 0.5, 0);
+    else h.translate(0, -1.5, -1.5).rotateY(Math.PI / 4).scale(5.5);
+    out.push({ mesh: im.mesh, model: h.m.slice(), light, noCull: im.flat, color: pose.color });
   }
   return out;
 }
@@ -219,6 +267,8 @@ export class Mob extends Entity {
     this.burnT = 0;
     this.lavaT = 0;
     this.soundT = 4 + rand() * 12;
+    this.swing = 0;
+    this.headPitch = 0;
   }
 
   update(dt, g) {
@@ -243,6 +293,7 @@ export class Mob extends Entity {
       if (dist < 1.5 && Math.abs(p.y - this.y) < 1.6 && this.attackCd <= 0) {
         g.damagePlayer(this.def.damage, this);
         this.attackCd = 1;
+        this.swing = 0.01;
       }
     } else if (this.flee > 0) {
       this.flee -= dt;
@@ -278,11 +329,15 @@ export class Mob extends Entity {
     if (liquid) this.vy = Math.min(this.vy + 22 * dt, 2.2);
     else this.vy = Math.max(this.vy - 28 * dt, -50);
     if (moving && (this.hitX || this.hitZ) && this.onGround) this.vy = 8.6;
-    moveEntity(w, this, this.vx * dt, this.vy * dt, this.vz * dt);
+    moveEntity(w, this, this.vx * dt, this.vy * dt, this.vz * dt, 0.55);
     const hs = Math.hypot(this.vx, this.vz);
     this.phase += hs * dt * 4.5;
     this.amount += (Math.min(1, hs / 1.5) - this.amount) * Math.min(1, 10 * dt);
-    this.headYaw = dist < 7 ? Math.max(-0.8, Math.min(0.8, angleDiff(Math.atan2(-dxp, -dzp), this.yaw))) : this.headYaw * 0.95;
+    const looking = dist < 8 && p.alive;
+    this.headYaw = looking ? Math.max(-0.9, Math.min(0.9, angleDiff(Math.atan2(-dxp, -dzp), this.yaw))) : this.headYaw * 0.95;
+    const eyeY = this.y + this.h * 0.85;
+    this.headPitch = looking ? Math.max(-0.7, Math.min(0.7, Math.atan2(p.y + p.eye - eyeY, Math.hypot(dxp, dzp)))) : (this.headPitch || 0) * 0.95;
+    if (this.swing > 0) { this.swing += dt * 3.2; if (this.swing >= 1) this.swing = 0; }
 
     if (liquid === 2) { this.lavaT += dt; if (this.lavaT > 0.5) { this.lavaT = 0; this.damage(4, null, g); } }
     if (this.def.hostile && g.daylight > 0.75 && !liquid) {
@@ -309,9 +364,9 @@ export class Mob extends Entity {
 
   draws(g, cam) {
     return poseDraws(g, cam, this.type, this, {
-      yaw: this.yaw, headYaw: this.headYaw, phase: this.phase, amount: this.amount,
+      bodyYaw: this.yaw, headYaw: this.headYaw, headPitch: this.headPitch || 0, phase: this.phase, amount: this.amount,
       tilt: this.health <= 0 ? Math.min(1, this.deathTime * 2.4) * (Math.PI / 2) : 0,
-      armsUp: this.type === 'ghoul',
+      armsForward: !!this.def.hostile, swing: this.swing,
       color: this.hurt > 0 || this.health <= 0 ? [1, 0.45, 0.45, 1] : null,
     });
   }
