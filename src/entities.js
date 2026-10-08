@@ -329,7 +329,7 @@ export class Mob extends Entity {
     if (liquid) this.vy = Math.min(this.vy + 22 * dt, 2.2);
     else this.vy = Math.max(this.vy - 28 * dt, -50);
     if (moving && (this.hitX || this.hitZ) && this.onGround) this.vy = 8.6;
-    moveEntity(w, this, this.vx * dt, this.vy * dt, this.vz * dt);
+    moveEntity(w, this, this.vx * dt, this.vy * dt, this.vz * dt, 0.55);
     const hs = Math.hypot(this.vx, this.vz);
     this.phase += hs * dt * 4.5;
     this.amount += (Math.min(1, hs / 1.5) - this.amount) * Math.min(1, 10 * dt);

@@ -253,6 +253,10 @@ body {
 #fatal h2 { margin: 0; color: var(--lamp); }
 #fatal p { max-width: 52ch; color: var(--muted); line-height: 1.5; margin: 0; }
 
+#sleep-fade { position: fixed; inset: 0; background: #05070a; opacity: 0; pointer-events: none; z-index: 9; }
+#sleep-fade.on { animation: sleep 2.4s ease-in-out; }
+@keyframes sleep { 0% { opacity: 0; } 40%, 60% { opacity: 1; } 100% { opacity: 0; } }
+
 /* ---------- touch ---------- */
 #touch { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
 #stick { position: absolute; left: calc(24px + env(safe-area-inset-left, 0px)); bottom: calc(110px + env(safe-area-inset-bottom, 0px)); width: 130px; height: 130px; border-radius: 50%; background: rgba(255, 255, 255, 0.08); border: 2px solid rgba(255, 255, 255, 0.25); pointer-events: auto; }

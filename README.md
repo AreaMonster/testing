@@ -16,9 +16,11 @@ Then open the printed URL in a recent Chrome, Edge, Firefox or Safari.
 
 - **Infinite world.** 16×16×128 chunks stream in around you with frustum culling and a configurable render distance.
 - **Terrain.** A 3D density field gives mountains real cliffs, arches and overhangs, while lowlands stay gentle. Rivers wind across the land.
-- **Biomes.** Oceans, beaches and stony shores, plains, flower meadows, forests, birch forests, swamps, taiga, snowy taiga, savannas with acacia trees, deserts, terraced badlands mesas with banded terracotta, and snow-capped peaks.
+- **Biomes.** Oceans, beaches and stony shores, plains, flower meadows, cherry groves, forests, birch forests, swamps, taiga, snowy taiga, savannas with acacia trees, deserts, terraced badlands mesas with banded terracotta, and snow-capped peaks.
 - **Trees and features.** Big oaks with branches, tall spruces and birches, bushes, fallen logs, mossy boulders, sugar cane along the water, pumpkins and ferns.
-- **Underground.** Spaghetti and cavern caves, lava lakes near the bottom, and coal, iron, gold and diamond ore veins.
+- **Underground.** Spaghetti and cavern caves, ravines, lava lakes near the bottom, crystal geodes, mushrooms, granite, marble, slate and basalt formations, and coal, copper, iron, gold and diamond ore veins.
+- **Structures.** Overgrown ruined towers on the surface and mossy crypts underground, each with a chest of loot.
+- **Ponds** in grassy country and rare lava pools in dry lands.
 - **Background generation.** Chunks are generated in Web Workers, so exploring doesn't stutter.
 - **Lighting.** Flood-fill sky light and block light (torches, lava, lumen blocks), smooth lighting and ambient occlusion, all updated live as you dig and build.
 - **Fluids.** Water and lava flow, fall and drain. Two water sources make an infinite pool, and water meeting lava hardens it into cobblestone or obsidian.
@@ -26,12 +28,16 @@ Then open the printed URL in a recent Chrome, Edge, Firefox or Safari.
 - **Mining.** Tools come in four tiers (wood, stone, iron, diamond) with their own speeds, durability, and rules about which blocks they can harvest.
 - **Crafting.** A 2×2 grid in your inventory and a 3×3 crafting table, with shaped and shapeless recipes (mirrored shapes work too).
 - **Containers.** Furnaces with fuel and smelting, and chests with 27 slots.
+- **Building blocks.** Stone varieties and polished versions, smooth stone, mossy, cracked and chiseled stone bricks, cherry wood, copper, eight colours of stained glass, slabs (two stack into a full block), ladders you can climb, lanterns (standing or hanging), hay bales, melons, moss and crystal.
+- **Farming.** Till grass with a hoe, plant seeds from tall grass, and harvest wheat for bread and hay. Sleep in a bedroll to skip the night and set your spawn point.
 - **Creative mode.** Flight, instant breaking, and a searchable palette of every block and item.
 - **Creatures.** Pigs, cows and sheep wander, look at you, flee when hit, and drop food and wool. Ghouls spawn in the dark, chase you, swing at you, and burn in sunlight. Everything casts a soft shadow.
 - **Third-person view (F5).** Your character's head follows where you look, the body turns with a natural lag, arms swing when you mine or attack, limbs swing as you walk, sneaking leans the body forward, and the held item shows in hand.
 - **World behaviour.** Sand and gravel fall, plants and torches pop off without support, grass spreads, and saplings grow into trees.
+- **Weather.** Rain spells and thunderstorms with lightning, snow in cold biomes, dry spells in deserts, darker skies, heavier clouds and closer fog.
+- **Graphics.** A post-processing pass adds glow around light sources and the sun, gentle colour grading, a vignette and an underwater wobble. Torches flicker, the moon has phases, and clouds have two layers. The effects can be turned off in Settings.
 - **Sky and water.** Day/night cycle with sun, moon, stars, sunset glow and drifting clouds. Water has gentle waves and sun glints, leaves sway, and torches flicker with flames and smoke.
-- **Sound.** Procedural Web Audio effects for every material, plus a sparse generative ambient score.
+- **Sound.** Procedural Web Audio throughout: layered material sounds, birds by day, crickets at night, wind on mountains, rain and thunder, cave drips with echo, lapping water, and a generative score that changes with the time of day and when you're underground.
 - **Saves.** Multiple worlds stored in `localStorage`, with only the changed blocks kept per chunk.
 - **Controls.** Mouse and keyboard, or touch: a joystick, drag to look, tap to place and hold to mine.
 

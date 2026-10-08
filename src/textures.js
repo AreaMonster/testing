@@ -1,7 +1,7 @@
 // Procedural 16x16 pixel-art textures. Every block, item, mob skin and crack
 // stage is painted here at startup into one texture array.
 import { mulberry32, hashStr } from './noise.js';
-import { WOOL_COLORS, TERRACOTTA_COLORS, BLOCKS, ITEMS, R, TEXL, FRONTL, itemDef } from './blocks.js';
+import { WOOL_COLORS, TERRACOTTA_COLORS, GLASS_COLORS, BLOCKS, ITEMS, R, TEXL, FRONTL, itemDef } from './blocks.js';
 
 export const LAYERS = {};
 export const layerData = [];
@@ -75,71 +75,127 @@ function add(name, painter) {
 }
 
 // ---------- terrain painters ----------
-const paintStone = (px, rnd) => {
-  noiseFill(px, rnd, [122, 122, 124], 0.32, 5, 1);
-  for (let i = 0; i < 4; i++) {
+// Light comes from the top-left; emboss() turns a height field into that shading.
+const emboss = (h, x, y) => h[((y - 1) & 15) * 16 + ((x - 1) & 15)] - h[((y + 1) & 15) * 16 + ((x + 1) & 15)];
+function voronoi2(rnd, n) {
+  const pts = [];
+  for (let i = 0; i < n; i++) pts.push([rnd() * 16, rnd() * 16, rnd()]);
+  return (x, y) => {
+    let d1 = 1e9, d2 = 1e9, best = null, bdx = 0, bdy = 0;
+    for (const p of pts) for (let ox = -16; ox <= 16; ox += 16) for (let oy = -16; oy <= 16; oy += 16) {
+      const dx = x + 0.5 - p[0] - ox, dy = y + 0.5 - p[1] - oy, d = Math.hypot(dx, dy);
+      if (d < d1) { d2 = d1; d1 = d; best = p; bdx = dx; bdy = dy; } else if (d < d2) d2 = d;
+    }
+    return { d1, d2, v: best[2], dx: bdx, dy: bdy };
+  };
+}
+const paintStone = (px, rnd, base = [124, 124, 128]) => {
+  const f1 = field(rnd, 2), f2 = field(rnd, 0);
+  px.each((x, y) => {
+    const i = y * 16 + x;
+    const v = 0.8 + quant(f1[i] * 0.75 + f2[i] * 0.25, 6) * 0.3 + emboss(f1, x, y) * 0.35;
+    px.set(x, y, mul(base, v));
+  });
+  for (let c = 0; c < 2; c++) {
     let x = Math.floor(rnd() * 16), y = Math.floor(rnd() * 16);
-    for (let k = 0; k < 3; k++) { px.set(x, y, mul(px.get(x, y), 0.82)); x += rnd() < 0.5 ? 1 : 0; y += 1; }
+    for (let k = 0; k < 5; k++) { px.set(x & 15, y & 15, mul(px.get(x, y), 0.76)); if (rnd() < 0.6) x++; if (rnd() < 0.6) y++; }
   }
 };
 const paintDirt = (px, rnd) => {
-  noiseFill(px, rnd, [122, 86, 58], 0.38, 5, 1);
-  for (let i = 0; i < 14; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), rnd() < 0.5 ? [150, 112, 80] : [92, 64, 42]);
+  const f = field(rnd, 1);
+  px.each((x, y) => px.set(x, y, mul([126, 88, 60], 0.82 + quant(f[y * 16 + x], 5) * 0.3 + (rnd() - 0.5) * 0.08)));
+  for (let i = 0; i < 7; i++) {
+    const x = Math.floor(rnd() * 16), y = Math.floor(rnd() * 16);
+    const c = rnd() < 0.5 ? [156, 122, 92] : [116, 102, 90];
+    px.set(x, y, mul(c, 1.12)); px.set((x + 1) & 15, y, c); px.set(x, (y + 1) & 15, c); px.set((x + 1) & 15, (y + 1) & 15, mul(c, 0.72));
+  }
+  for (let i = 0; i < 10; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), [86, 58, 38]);
 };
-const paintCobble = (px, rnd, tone = [128, 128, 128]) => {
-  const vo = voronoi(rnd, 11);
+const paintCobble = (px, rnd, tone = [128, 128, 130]) => {
+  const vo = voronoi2(rnd, 12);
   px.each((x, y) => {
-    const c = vo(x, y);
-    if (c.d2 - c.d1 < 1.1) px.set(x, y, mul(tone, 0.55 + rnd() * 0.08));
-    else {
-      const edge = Math.min(1, (c.d2 - c.d1) / 3);
-      const v = (0.78 + c.v * 0.3) * (0.92 + edge * 0.12) * (0.95 + rnd() * 0.1);
-      px.set(x, y, mul(tone, v));
-    }
+    const c = vo(x, y), gap = c.d2 - c.d1;
+    if (gap < 0.9) return px.set(x, y, mul(tone, 0.45 + rnd() * 0.06));
+    const light = (-(c.dx + c.dy) / (c.d1 + 0.5)) * 0.12;
+    const v = 0.78 + c.v * 0.26 + light + (gap < 1.8 ? -0.08 : 0) + (rnd() - 0.5) * 0.06;
+    px.set(x, y, mul(tone, v));
   });
 };
 const paintPlanks = (base) => (px, rnd) => {
-  const f = field(rnd, 0);
+  const offs = [0, 1, 2, 3].map(() => Math.floor(rnd() * 16));
+  const tones = [0, 1, 2, 3].map(() => 0.92 + rnd() * 0.12);
   px.each((x, y) => {
-    const board = y >> 2;
-    let v = 0.9 + f[y * 16 + x] * 0.12 + Math.sin((x + board * 7) * 0.9) * 0.03;
-    if (y % 4 === 3) v = 0.66;
-    if (x === (board * 5 + 3) % 16 && y % 4 !== 3) v *= 0.72;
+    const b = y >> 2, yy = y & 3;
+    let v = tones[b] + Math.sin(x * 0.7 + offs[b] + yy * 1.3) * 0.035 + (rnd() - 0.5) * 0.05;
+    if (yy === 0) v += 0.07;
+    if (yy === 3) v = 0.62;
+    else if (x === offs[b]) v = 0.68;
+    else if (x === ((offs[b] + 1) & 15)) v += 0.06;
     px.set(x, y, mul(base, v));
   });
+  for (let i = 0; i < 2; i++) {
+    const b = Math.floor(rnd() * 4), x = Math.floor(rnd() * 14), y = b * 4 + 1;
+    px.set(x, y, mul(base, 0.7)); px.set(x + 1, y, mul(base, 0.76));
+  }
 };
 const paintBark = (base, dark) => (px, rnd) => {
-  const cols = [];
-  for (let x = 0; x < 16; x++) cols.push(0.82 + rnd() * 0.28);
+  const ph = rnd() * 6;
   px.each((x, y) => {
-    const crevice = (x % 5 === 1 || x % 7 === 4) && rnd() < 0.8;
-    px.set(x, y, crevice ? mul(dark, 0.9 + rnd() * 0.15) : mul(base, cols[x] * (0.92 + rnd() * 0.14)));
+    const r = (Math.sin((x + Math.sin(y * 0.55 + ph + x * 0.3) * 0.9) * 1.35) + 1) / 2;
+    const n = rnd();
+    px.set(x, y, r < 0.16 ? mul(dark, 0.88 + n * 0.16) : mul(base, 0.78 + r * 0.32 + (n - 0.5) * 0.1));
   });
 };
-const paintLogTop = (ringA, ringB, bark) => (px) => {
+const paintLogTop = (ringA, ringB, bark) => (px, rnd) => {
+  const ca = rnd() * 6.28;
   px.each((x, y) => {
-    if (x === 0 || y === 0 || x === 15 || y === 15) return px.set(x, y, bark);
-    const d = Math.max(Math.abs(x - 7.5), Math.abs(y - 7.5)) + Math.hypot(x - 7.5, y - 7.5) * 0.2;
-    px.set(x, y, Math.floor(d * 0.9) % 2 ? ringA : ringB);
+    if (x === 0 || y === 0 || x === 15 || y === 15) return px.set(x, y, mul(bark, 0.9 + rnd() * 0.15));
+    const dx = x - 7.5, dy = y - 7.5;
+    const d = Math.max(Math.abs(dx), Math.abs(dy)) * 0.7 + Math.hypot(dx, dy) * 0.35;
+    let c = mul(Math.floor(d * 1.05) % 2 ? ringA : ringB, 0.95 + rnd() * 0.08);
+    const ang = Math.atan2(dy, dx);
+    if (d > 1.5 && Math.abs(((ang - ca + 9.4248) % 6.2832) - 3.1416) < 0.14) c = mul(ringB, 0.72);
+    if (d < 1.2) c = mul(ringB, 0.85);
+    px.set(x, y, c);
   });
 };
 const paintLeaves = (px, rnd) => {
   const f = field(rnd, 1);
   px.each((x, y) => {
-    if (rnd() < 0.16) return px.set(x, y, [0, 0, 0], 0);
-    const v = 0.55 + quant(f[y * 16 + x], 4) * 0.45 + rnd() * 0.08;
+    if (rnd() < 0.14) return px.set(x, y, [0, 0, 0], 0);
+    const v = 0.42 + f[y * 16 + x] * 0.26;
     px.set(x, y, [200 * v, 200 * v, 200 * v]);
   });
+  for (let i = 0; i < 28; i++) {
+    const x = Math.floor(rnd() * 16), y = Math.floor(rnd() * 16), v = 0.78 + rnd() * 0.3;
+    px.set(x, y, [214 * v, 214 * v, 214 * v]);
+    px.set((x + 1) & 15, y, [184 * v, 184 * v, 184 * v]);
+    px.set(x, (y + 1) & 15, [168 * v, 168 * v, 168 * v]);
+    px.set((x + 1) & 15, (y + 1) & 15, [120 * v, 120 * v, 120 * v]);
+  }
 };
 const paintOre = (color, hi) => (px, rnd) => {
   paintStone(px, rnd);
   const n = 4 + Math.floor(rnd() * 2);
   for (let i = 0; i < n; i++) {
-    let x = 2 + Math.floor(rnd() * 12), y = 2 + Math.floor(rnd() * 12);
-    const k = 2 + Math.floor(rnd() * 3);
+    const cx = 2 + Math.floor(rnd() * 12), cy = 2 + Math.floor(rnd() * 12);
+    const cells = new Set();
+    let x = cx, y = cy;
+    const k = 3 + Math.floor(rnd() * 3);
     for (let j = 0; j < k; j++) {
-      px.set(x, y, j === 0 ? hi : mul(color, 0.85 + rnd() * 0.25));
+      cells.add(y * 16 + x);
       if (rnd() < 0.5) x += rnd() < 0.5 ? 1 : -1; else y += rnd() < 0.5 ? 1 : -1;
+      x = Math.max(1, Math.min(14, x)); y = Math.max(1, Math.min(14, y));
+    }
+    for (const c of cells) {
+      const ox = c & 15, oy = c >> 4;
+      for (const [sx, sy] of [[1, 0], [0, 1], [1, 1]]) if (!cells.has((oy + sy) * 16 + ox + sx)) px.set(ox + sx, oy + sy, mul(px.get(ox + sx, oy + sy), 0.6));
+    }
+    let first = true;
+    for (const c of cells) {
+      const ox = c & 15, oy = c >> 4;
+      px.set(ox, oy, first ? hi : mul(color, 0.85 + rnd() * 0.25));
+      first = false;
     }
   }
 };
@@ -821,6 +877,326 @@ sprite('bucket', bucket(null));
 sprite('water_bucket', bucket([[70, 120, 230], [44, 86, 200]]));
 sprite('lava_bucket', bucket([[255, 180, 50], [226, 90, 20]]));
 
+// ---------- refreshed base textures (override the first-pass versions) ----------
+add('grass_top', (px, rnd) => {
+  const f = field(rnd, 1);
+  px.each((x, y) => { const v = 0.72 + quant(f[y * 16 + x], 5) * 0.22 + (rnd() - 0.5) * 0.1; px.set(x, y, [210 * v, 210 * v, 210 * v]); });
+  for (let i = 0; i < 40; i++) {
+    const x = Math.floor(rnd() * 16), y = Math.floor(rnd() * 16), v = 0.98 + rnd() * 0.1;
+    px.set(x, y, [232 * v, 232 * v, 232 * v]); px.set(x, (y + 1) & 15, [150, 150, 150]);
+  }
+});
+add('grass_side', (px, rnd) => {
+  paintDirt(px, rnd);
+  let h = 3;
+  for (let x = 0; x < 16; x++) {
+    h = Math.max(2, Math.min(5, h + (rnd() < 0.35 ? (rnd() < 0.5 ? -1 : 1) : 0)));
+    const drip = rnd() < 0.18 ? 2 : 0;
+    for (let y = 0; y < h + drip; y++) px.set(x, y, mul([104, 158, 66], (y === h + drip - 1 ? 0.78 : 0.9) + rnd() * 0.18));
+    px.set(x, 0, mul([120, 176, 76], 0.95 + rnd() * 0.1));
+  }
+});
+const sandLike = (base, dark, light) => (px, rnd) => {
+  px.each((x, y) => {
+    const rip = Math.sin(x * 0.55 + y * 1.15 + Math.sin(x * 0.3) * 1.5) * 0.5 + 0.5;
+    px.set(x, y, mul(base, 0.9 + rip * 0.07 + (rnd() - 0.5) * 0.1));
+  });
+  for (let i = 0; i < 16; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), rnd() < 0.5 ? dark : light);
+};
+add('sand', sandLike([222, 208, 162], [190, 172, 128], [242, 232, 198]));
+add('red_sand', sandLike([190, 104, 52], [158, 82, 40], [214, 132, 74]));
+add('gravel', (px, rnd) => {
+  const pal = [[134, 128, 124], [112, 106, 102], [158, 150, 144], [94, 90, 88], [142, 126, 112]];
+  const vo = voronoi2(rnd, 20);
+  px.each((x, y) => {
+    const c = vo(x, y), base = pal[Math.floor(c.v * pal.length)];
+    if (c.d2 - c.d1 < 0.65) return px.set(x, y, mul(base, 0.55));
+    px.set(x, y, mul(base, 0.92 + (-(c.dx + c.dy) / (c.d1 + 0.6)) * 0.14 + (rnd() - 0.5) * 0.06));
+  });
+});
+add('bricks', (px, rnd) => {
+  const tones = [];
+  for (let i = 0; i < 16; i++) tones.push(0.84 + rnd() * 0.26);
+  px.each((x, y) => {
+    const row = y >> 2, off = row % 2 ? 4 : 0, yy = y & 3, xx = (x + off) & 7;
+    if (yy === 3 || xx === 7) return px.set(x, y, mul([168, 160, 150], 0.88 + rnd() * 0.1));
+    let v = tones[row * 2 + (((x + off) >> 3) & 1)] * (0.95 + rnd() * 0.08);
+    if (yy === 0) v *= 1.12; if (yy === 2 || xx === 6) v *= 0.82;
+    px.set(x, y, mul([150, 72, 54], v));
+  });
+});
+add('stone_bricks', (px, rnd) => {
+  const f = field(rnd, 1);
+  px.each((x, y) => {
+    const row = y >> 3, off = row ? 4 : 0, yy = y & 7, xx = (x + off) & 7;
+    if (yy === 7 || xx === 7) return px.set(x, y, [82, 82, 86]);
+    let v = 0.9 + f[y * 16 + x] * 0.14;
+    if (yy === 0 || xx === 0) v = 1.1; else if (yy === 6 || xx === 6) v *= 0.82;
+    px.set(x, y, mul([126, 126, 130], v));
+  });
+});
+add('water', (px, rnd) => {
+  px.each((x, y) => {
+    const c1 = Math.sin(x * 0.8 + Math.sin(y * 0.6) * 2) * Math.sin(y * 0.7 + Math.sin(x * 0.5) * 2);
+    const caustic = Math.max(0, c1) ** 3;
+    px.set(x, y, mix([34, 82, 196], [120, 176, 246], caustic * 0.8 + rnd() * 0.06), 168 + caustic * 50);
+  });
+});
+add('glass', (px) => {
+  px.each((x, y) => {
+    const edge = x === 0 || y === 0 || x === 15 || y === 15;
+    const inner = x === 1 || y === 1 || x === 14 || y === 14;
+    if (edge) px.set(x, y, [200, 224, 232], 255);
+    else if (inner) px.set(x, y, [236, 248, 252], 120);
+    else if ((x - y === 3 && x > 3 && x < 9) || (x - y === 5 && x > 6 && x < 11) || (x - y === -6 && x > 7 && x < 11)) px.set(x, y, [255, 255, 255], 160);
+    else px.set(x, y, [210, 236, 244], 20);
+  });
+});
+add('snow', (px, rnd) => {
+  noiseFill(px, rnd, [240, 246, 252], 0.06, 3, 1);
+  for (let i = 0; i < 6; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), [255, 255, 255]);
+  for (let i = 0; i < 8; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), [212, 224, 238]);
+});
+
+// ---------- content update textures ----------
+const speckled = (base, specks) => (px, rnd) => {
+  const f = field(rnd, 1);
+  px.each((x, y) => px.set(x, y, mul(base, 0.88 + f[y * 16 + x] * 0.16 + emboss(f, x, y) * 0.2)));
+  for (const [col, n] of specks) for (let i = 0; i < n; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), mul(col, 0.9 + rnd() * 0.2));
+};
+add('granite', speckled([156, 106, 88], [[[194, 144, 124], 30], [[108, 70, 60], 22], [[214, 204, 200], 8]]));
+add('marble', (px, rnd) => {
+  const ph = rnd() * 10;
+  px.each((x, y) => {
+    const vein = Math.abs(Math.sin(x * 0.35 + y * 0.22 + Math.sin(y * 0.5 + ph) * 1.6));
+    let c = mul([230, 228, 222], 0.96 + rnd() * 0.05);
+    if (vein < 0.12) c = [168, 168, 174]; else if (vein < 0.22) c = [204, 204, 208];
+    px.set(x, y, c);
+  });
+});
+add('slate', (px, rnd) => {
+  const rows = [];
+  for (let y = 0; y < 16; y++) rows.push(0.86 + rnd() * 0.2);
+  px.each((x, y) => {
+    let v = rows[y] * (0.95 + rnd() * 0.08);
+    if (rnd() < 0.05) v *= 0.75;
+    px.set(x, y, mul([72, 76, 86], v));
+  });
+  for (let i = 0; i < 4; i++) { const y = Math.floor(rnd() * 16), x0 = Math.floor(rnd() * 10); for (let x = x0; x < x0 + 5; x++) px.set(x, y, [104, 108, 120]); }
+});
+add('basalt_side', (px, rnd) => px.each((x, y) => {
+  const col = Math.sin(x * 1.6) * 0.5 + 0.5;
+  px.set(x, y, mul([66, 64, 70], 0.8 + col * 0.35 + (rnd() - 0.5) * 0.1));
+}));
+add('basalt_top', (px, rnd) => {
+  const vo = voronoi2(rnd, 7);
+  px.each((x, y) => { const c = vo(x, y); px.set(x, y, c.d2 - c.d1 < 0.8 ? [40, 38, 44] : mul([78, 76, 84], 0.88 + c.v * 0.2)); });
+});
+const polished = (base) => (px, rnd) => {
+  const f = field(rnd, 2);
+  px.each((x, y) => {
+    let v = 0.96 + f[y * 16 + x] * 0.06;
+    if (x === 0 || y === 0) v = 1.14; else if (x === 15 || y === 15) v = 0.72; else if (x === 1 || y === 1) v = 1.05;
+    px.set(x, y, mul(base, v));
+  });
+};
+add('polished_granite', polished([162, 110, 92]));
+add('polished_marble', polished([232, 230, 226]));
+add('polished_slate', polished([78, 82, 94]));
+add('smooth_stone', polished([160, 160, 164]));
+add('smooth_stone_side', (px, rnd) => {
+  polished([160, 160, 164])(px, rnd);
+  for (let x = 0; x < 16; x++) { px.set(x, 7, [112, 112, 116]); px.set(x, 8, [176, 176, 180]); }
+});
+add('mossy_stone_bricks', (px, rnd) => {
+  px.d.set(layerData[LAYERS.stone_bricks]);
+  const f = field(rnd, 2);
+  px.each((x, y) => { if (f[y * 16 + x] > 0.58 || (y < 3 && f[y * 16 + x] > 0.4)) px.set(x, y, mul([84, 124, 52], 0.78 + rnd() * 0.35)); });
+});
+add('cracked_stone_bricks', (px, rnd) => {
+  px.d.set(layerData[LAYERS.stone_bricks]);
+  for (let c = 0; c < 3; c++) {
+    let x = Math.floor(rnd() * 16), y = Math.floor(rnd() * 16);
+    for (let k = 0; k < 7; k++) { px.set(x & 15, y & 15, [52, 52, 56]); x += rnd() < 0.5 ? 1 : 0; y += rnd() < 0.7 ? 1 : -1; }
+  }
+});
+add('chiseled_stone_bricks', (px, rnd) => {
+  polished([126, 126, 130])(px, rnd);
+  for (let i = 3; i < 13; i++) { px.set(i, 3, [86, 86, 90]); px.set(i, 12, [160, 160, 164]); px.set(3, i, [86, 86, 90]); px.set(12, i, [160, 160, 164]); }
+  for (let y = 6; y < 10; y++) for (let x = 6; x < 10; x++) px.set(x, y, (x + y) % 2 ? [98, 98, 104] : [140, 140, 146]);
+});
+add('copper_ore', paintOre([206, 122, 74], [250, 178, 120]));
+add('copper_block', (px, rnd) => {
+  paintMetalBlock([200, 116, 74], [150, 82, 52])(px, rnd);
+  for (let i = 0; i < 9; i++) px.set(1 + Math.floor(rnd() * 14), 1 + Math.floor(rnd() * 14), [96, 172, 150]);
+});
+add('log_cherry', (px, rnd) => {
+  paintBark([96, 54, 58], [58, 30, 36])(px, rnd);
+  for (let i = 0; i < 6; i++) { const x = Math.floor(rnd() * 13), y = Math.floor(rnd() * 16); px.set(x, y, [150, 104, 100]); px.set(x + 1, y, [150, 104, 100]); px.set(x + 2, y, [128, 86, 84]); }
+});
+add('log_cherry_top', paintLogTop([222, 166, 160], [200, 142, 138], [88, 50, 54]));
+add('planks_cherry', paintPlanks([226, 178, 168]));
+add('leaves_cherry', (px, rnd) => {
+  const f = field(rnd, 1);
+  px.each((x, y) => {
+    if (rnd() < 0.13) return px.set(x, y, [0, 0, 0], 0);
+    const v = f[y * 16 + x];
+    px.set(x, y, mix([214, 112, 160], [250, 196, 222], v * 0.8 + rnd() * 0.2));
+  });
+  for (let i = 0; i < 14; i++) { const x = Math.floor(rnd() * 16), y = Math.floor(rnd() * 16); px.set(x, y, [255, 230, 240]); }
+});
+for (const [k, , col] of GLASS_COLORS) {
+  add(`glass_${k.toLowerCase()}`, (px) => px.each((x, y) => {
+    const edge = x === 0 || y === 0 || x === 15 || y === 15;
+    const shine = (x - y === 4 && x > 4 && x < 10) || (x - y === 6 && x > 7 && x < 12);
+    px.set(x, y, edge ? mul(col, 0.8) : shine ? mix(col, [255, 255, 255], 0.6) : col, edge ? 230 : shine ? 190 : 120);
+  }));
+}
+add('ladder', (px) => {
+  clear(px);
+  for (let y = 0; y < 16; y++) { px.set(2, y, [130, 96, 54]); px.set(3, y, [104, 74, 40]); px.set(12, y, [130, 96, 54]); px.set(13, y, [104, 74, 40]); }
+  for (const y of [1, 5, 9, 13]) for (let x = 1; x < 15; x++) { px.set(x, y, [150, 112, 66]); px.set(x, y + 1, [110, 80, 44]); }
+});
+add('lantern', (px) => {
+  px.each((x, y) => {
+    const frame = x < 2 || x > 13 || y < 2 || y > 13 || x === 7 || x === 8;
+    if (frame) return px.set(x, y, (x + y) % 3 ? [58, 60, 66] : [80, 82, 90]);
+    const d = Math.hypot(x - 7.5, y - 8) / 7;
+    px.set(x, y, mix([255, 246, 196], [242, 160, 60], d));
+  });
+});
+add('lantern_cap', (px, rnd) => px.each((x, y) => px.set(x, y, mul([60, 62, 70], 0.85 + rnd() * 0.3))));
+add('hay_side', (px, rnd) => px.each((x, y) => {
+  let c = mul([206, 172, 64], 0.86 + rnd() * 0.24);
+  if (y === 3 || y === 12) c = [150, 92, 40];
+  if ((x + Math.floor(rnd() * 2)) % 4 === 0) c = mul(c, 0.86);
+  px.set(x, y, c);
+}));
+add('hay_top', (px, rnd) => px.each((x, y) => {
+  const d = Math.hypot(x - 7.5, y - 7.5);
+  px.set(x, y, mul([214, 180, 72], 0.8 + (Math.sin(d * 2.4 + rnd()) * 0.5 + 0.5) * 0.25));
+}));
+add('melon_side', (px, rnd) => px.each((x, y) => {
+  const stripe = Math.floor((x + Math.sin(y * 0.5) * 1.2) / 2.6) % 2;
+  px.set(x, y, mul(stripe ? [106, 152, 40] : [66, 112, 30], 0.92 + rnd() * 0.12));
+}));
+add('melon_top', (px, rnd) => px.each((x, y) => {
+  const a = Math.atan2(y - 7.5, x - 7.5);
+  px.set(x, y, mul(Math.floor((a + 3.2) * 2.2) % 2 ? [110, 156, 44] : [74, 120, 34], 0.92 + rnd() * 0.1));
+}));
+const mushroom = (cap, spot) => (px, rnd) => {
+  clear(px);
+  for (let y = 9; y < 16; y++) { px.set(7, y, [226, 216, 196]); px.set(8, y, [198, 188, 170]); }
+  for (let y = 4; y < 10; y++) for (let x = 3; x < 13; x++) {
+    const d = Math.hypot((x - 7.5) / 5, (y - 9) / 5);
+    if (d < 1 && y < 10) px.set(x, y, y === 9 ? mul(cap, 0.7) : mul(cap, 0.9 + rnd() * 0.15));
+  }
+  if (spot) [[5, 6], [9, 5], [10, 7], [7, 7]].forEach(([x, y]) => px.set(x, y, spot));
+};
+add('mushroom_red', mushroom([200, 40, 36], [244, 236, 226]));
+add('mushroom_brown', mushroom([150, 108, 76], null));
+add('moss', (px, rnd) => {
+  const f = field(rnd, 1);
+  px.each((x, y) => px.set(x, y, mul([92, 128, 52], 0.78 + f[y * 16 + x] * 0.3 + (rnd() - 0.5) * 0.12)));
+  for (let i = 0; i < 12; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), [128, 168, 72]);
+});
+add('crystal_block', (px, rnd) => {
+  const vo = voronoi2(rnd, 9);
+  px.each((x, y) => {
+    const c = vo(x, y);
+    if (c.d2 - c.d1 < 0.7) return px.set(x, y, [70, 54, 120]);
+    px.set(x, y, mix([118, 92, 196], [206, 186, 255], Math.max(0, (-(c.dx + c.dy) / (c.d1 + 0.5)) * 0.5 + 0.4) + c.v * 0.2));
+  });
+});
+add('crystal_cluster', (px) => {
+  clear(px);
+  const spikes = [[4, 6, 1], [7, 2, 2], [10, 5, 1], [12, 9, 1], [2, 10, 1]];
+  for (const [x0, top, w] of spikes) for (let y = top; y < 16; y++) for (let x = x0 - w; x <= x0 + w; x++) {
+    if (Math.abs(x - x0) > (y - top) * 0.5 + 0.3) continue;
+    px.set(x, y, x < x0 ? [226, 212, 255] : x === x0 ? [176, 150, 240] : [120, 94, 198]);
+  }
+});
+add('farmland', (px, rnd) => px.each((x, y) => {
+  const furrow = Math.floor(y / 4) % 2;
+  let c = mul(furrow ? [96, 64, 42] : [76, 50, 32], 0.88 + rnd() * 0.2);
+  if (y % 4 === 0) c = mul(c, 1.12);
+  if (x === 0 || x === 15) c = mul(c, 0.82);
+  px.set(x, y, c);
+}));
+for (let st = 0; st < 4; st++) {
+  add(`wheat_${st}`, (px, rnd) => {
+    clear(px);
+    const h = [4, 7, 11, 14][st];
+    const green = st < 3 ? [92, 150, 48] : [190, 160, 60];
+    for (const x0 of [1, 4, 7, 10, 13]) {
+      const hh = h - Math.floor(rnd() * 3);
+      for (let k = 0; k < hh; k++) px.set(x0 + (k > hh / 2 && rnd() < 0.4 ? 1 : 0), 15 - k, mul(green, 0.8 + (k / hh) * 0.3));
+      if (st >= 2) for (let k = 0; k < 4; k++) px.set(x0 + (k % 2), 15 - hh - Math.floor(k / 2), st === 3 ? [214, 184, 76] : [140, 170, 70]);
+    }
+  });
+}
+add('bedroll_top', (px, rnd) => px.each((x, y) => {
+  let c = mul([170, 44, 40], 0.92 + rnd() * 0.1);
+  if (y < 5) c = mul([234, 230, 220], 0.95 + rnd() * 0.05);
+  if (y === 5 || x === 0 || x === 15) c = [120, 28, 26];
+  if (y > 5 && (x + y) % 6 === 0) c = mul(c, 0.85);
+  px.set(x, y, c);
+}));
+add('bedroll_side', (px, rnd) => px.each((x, y) => px.set(x, y, y < 9 ? [72, 54, 40] : mul([150, 38, 34], 0.92 + rnd() * 0.1))));
+add('shelf', (px, rnd) => {
+  paintPlanks([168, 134, 82])(px, rnd);
+  for (let y = 1; y < 15; y++) for (let x = 1; x < 15; x++) if (y !== 7 && y !== 8) px.set(x, y, mul([70, 50, 30], 0.9 + rnd() * 0.1));
+  for (let x = 0; x < 16; x++) { px.set(x, 0, [110, 82, 46]); px.set(x, 7, [128, 98, 58]); px.set(x, 8, [150, 116, 70]); px.set(x, 15, [110, 82, 46]); }
+  [[3, 4, [200, 200, 210]], [4, 5, [170, 60, 50]], [11, 12, [80, 140, 200]]].forEach(([x, y, c]) => { px.set(x, y, c); px.set(x, y + 1, c); px.set(x, y + 2, c); });
+});
+add('glowstone_vein', (px, rnd) => {
+  paintStone(px, rnd);
+  for (let c = 0; c < 3; c++) {
+    let x = Math.floor(rnd() * 16), y = Math.floor(rnd() * 16);
+    for (let k = 0; k < 7; k++) { px.set(x & 15, y & 15, k % 3 ? [255, 214, 120] : [255, 244, 190]); x += rnd() < 0.5 ? 1 : -1; y += rnd() < 0.6 ? 1 : 0; }
+  }
+});
+add('rain', (px) => { clear(px); for (let y = 0; y < 16; y++) { px.set(7, y, [190, 210, 255], 90 + y * 6); px.set(8, y, [160, 180, 240], 50 + y * 4); } });
+add('snowflake', (px) => { clear(px); px.each((x, y) => { const d = Math.hypot(x - 7.5, y - 7.5); if (d < 5) px.set(x, y, [255, 255, 255], 255 * (1 - d / 5)); }); });
+
+// item sprites for the content update
+sprite('copper_ingot', ingot([212, 124, 76], [250, 176, 126], [150, 82, 52]));
+sprite('seeds', (px, rnd) => {
+  for (let i = 0; i < 14; i++) { const x = 3 + Math.floor(rnd() * 10), y = 5 + Math.floor(rnd() * 8); px.set(x, y, [120, 160, 60]); px.set(x, y + 1, [80, 110, 40]); }
+});
+sprite('wheat', (px) => {
+  for (let k = 0; k < 10; k++) { px.set(5 + k * 0.6 | 0, 14 - k, [196, 166, 70]); px.set(9 + k * 0.3 | 0, 14 - k, [176, 146, 56]); }
+  for (let k = 0; k < 5; k++) { px.set(9 + k % 2, 1 + k, [226, 196, 96]); px.set(12 - k % 2, 2 + k, [214, 182, 84]); px.set(6 + k % 2, 3 + k, [226, 196, 96]); }
+});
+sprite('bread', (px, rnd) => {
+  for (let y = 5; y < 12; y++) for (let x = 2; x < 14; x++) {
+    const d = Math.hypot((x - 7.5) / 6, (y - 8.5) / 3.5);
+    if (d < 1) px.set(x, y, d > 0.82 ? [130, 76, 30] : y < 7 ? mul([214, 150, 70], 1 + rnd() * 0.08) : [186, 120, 52]);
+  }
+  for (const x of [5, 8, 11]) px.set(x, 6, [240, 210, 150]);
+});
+sprite('melon_slice', (px) => {
+  for (let y = 4; y < 14; y++) for (let x = 2; x < 14; x++) {
+    const d = Math.hypot(x - 7.5, y - 3.5);
+    if (y < 4 || d > 9.5) continue;
+    px.set(x, y, d > 8.4 ? [70, 130, 40] : d > 7.6 ? [210, 230, 170] : [226, 64, 60]);
+  }
+  [[6, 7], [9, 7], [7, 10], [10, 9], [5, 9]].forEach(([x, y]) => px.set(x, y, [30, 20, 20]));
+});
+sprite('mushroom_stew', (px) => {
+  for (let y = 7; y < 14; y++) { const w = 6 - Math.max(0, y - 10); for (let x = 8 - w; x < 8 + w; x++) px.set(x, y, y === 7 ? [150, 110, 70] : [110, 76, 46]); }
+  for (let x = 3; x < 13; x++) px.set(x, 7, [190, 140, 90]);
+  px.set(6, 7, [200, 50, 40]); px.set(9, 7, [168, 120, 82]);
+});
+for (const [mat, [base, dark, light]] of Object.entries(MAT_COLORS)) {
+  sprite(`${mat}_hoe`, (px) => {
+    handle(px, 10);
+    [[7, 2], [8, 2], [9, 2], [10, 2], [11, 3]].forEach(([x, y]) => px.set(x, y, light));
+    [[7, 3], [8, 3], [9, 3], [10, 3]].forEach(([x, y]) => px.set(x, y, base));
+    px.set(6, 3, dark); px.set(6, 4, dark);
+  });
+}
+
 export const LAYER_COUNT = layerData.length;
 
 export function textureArrayData() {
@@ -862,7 +1238,7 @@ export function iconURL(id) {
   ctx.imageSmoothingEnabled = false;
   const d = itemDef(id);
   if (!d) return '';
-  if (d.isBlock && (d.render === R.CUBE || d.render === R.CUTOUT)) {
+  if (d.isBlock && (d.render === R.CUBE || d.render === R.CUTOUT || d.render === R.GLASS || d.render === R.SLAB)) {
     const top = layerCanvas(TEXL[id * 6 + 2], d.tint && d.tint !== 2 ? tintFor(d.tint) : null);
     const sideTint = d.tint >= 3 ? tintFor(d.tint) : null;
     const left = layerCanvas(d.front ? FRONTL[id] : TEXL[id * 6 + 4], sideTint);
@@ -937,7 +1313,7 @@ export function cloudData() {
   const o1 = octave(8), o2 = octave(16), o3 = octave(32);
   for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
     const v = o1(x, y) * 0.55 + o2(x, y) * 0.3 + o3(x, y) * 0.15;
-    out[y * N + x] = v > 0.56 ? 255 : 0;
+    out[y * N + x] = Math.max(0, Math.min(255, Math.round(v * 255)));
   }
   return out;
 }

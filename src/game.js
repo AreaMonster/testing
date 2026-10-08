@@ -3,7 +3,7 @@ import { Renderer } from './renderer.js';
 import { buildChunkMesh } from './mesher.js';
 import { World, ckey } from './world.js';
 import { WorldGen, BIOME_NAMES, placeTree } from './worldgen.js';
-import { B, I, BLOCKS, ITEMS, OPAQUE, SOLID, LIQUID, REPLACEABLE, TEXL, LOG, itemDef, itemName, maxStackOf, canHarvest, breakTime, toolOf, nameToId } from './blocks.js';
+import { B, I, BLOCKS, ITEMS, OPAQUE, SOLID, LIQUID, REPLACEABLE, TEXL, LOG, SHAPE, CLIMB, blockSpan, itemDef, itemName, maxStackOf, canHarvest, breakTime, toolOf, nameToId } from './blocks.js';
 import { Inventory, SMELT, SMELT_TIME, fuelTime } from './crafting.js';
 import { Entity, ItemEntity, FallingBlock, Mob, MOB_TYPES, poseDraws, mobParts } from './entities.js';
 import { moveEntity, raycast, rayBox, entityBox, groundBelow, boxTouches } from './physics.js';
@@ -11,7 +11,8 @@ import { Mat4, clamp, smooth, lerp } from './math.js';
 import { CH, SEA, TICK } from './consts.js';
 import { Store } from './save.js';
 import { DEFAULT_GRASS, LAYERS } from './textures.js';
-import { boxMesh } from './mesher.js';
+import { boxMesh, MeshBuf } from './mesher.js';
+import { hash2 } from './noise.js';
 const L = (n) => LAYERS[n];
 
 const rand = Math.random;
@@ -111,7 +112,7 @@ class GenPool {
 
 const DEFAULT_SETTINGS = {
   renderDist: 8, fov: 75, sensitivity: 1, gamma: 0.85, music: 0.4, sfx: 0.8,
-  bob: true, fancyLeaves: true, clouds: true, invertY: false, scale: 1,
+  bob: true, fancyLeaves: true, clouds: true, invertY: false, scale: 1, post: true,
 };
 
 export class Game {
@@ -160,6 +161,11 @@ export class Game {
     this.cloudOffset = 0;
     this.loadStart = 0;
     this.pool = new GenPool();
+    this.weather = { rain: 0, target: 0, timer: 6000 + rand() * 12000, thunder: false, flash: 0, boltT: 10 };
+    this.storm = false;
+    this.precipHere = 0;
+    this.precipKind_ = 0;
+    this.weatherBuf = new MeshBuf(4096);
     this.epoch = 0;
     this.applySettings();
   }
@@ -219,6 +225,7 @@ export class Game {
       p.inv.load(st.inv);
       this.world.time = st.time ?? 1000;
       this.world.day = st.day || 0;
+      if (st.weather) Object.assign(this.weather, st.weather, { rain: st.weather.target });
       if (st.tiles) for (const [k, v] of Object.entries(st.tiles)) this.world.tileEntities.set(k, v);
       if (p.health <= 0) { p.health = 20; [p.x, p.y, p.z] = p.spawn; }
     } else {
@@ -249,7 +256,7 @@ export class Game {
     ok = this.store.saveState({
       x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch, health: p.health, hunger: p.hunger, sat: p.sat,
       mode: p.mode, sel: p.sel, inv: p.inv.toJSON(), spawn: p.spawn, flying: p.flying,
-      time: this.world.time, day: this.world.day, tiles: Object.fromEntries(this.world.tileEntities),
+      time: this.world.time, day: this.world.day, weather: { target: this.weather.target, timer: this.weather.timer, thunder: this.weather.thunder }, tiles: Object.fromEntries(this.world.tileEntities),
     }) && ok;
     if (this.meta) { this.meta.lastPlayed = Date.now(); this.meta.mode = p.mode; Store.upsertWorld(this.meta); }
     if (!ok && !this.warnedStorage) {
@@ -413,13 +420,15 @@ export class Game {
       for (const e of this.entities) e.update(dt, this);
       this.entities = this.entities.filter((e) => !e.dead);
       this.torchEffects(dt);
+      this.updateWeather(dt);
       this.updateParticles(dt);
       this.processChecks();
       this.saveT += dt;
       if (this.saveT > 30) { this.saveT = 0; this.saveAll(); }
     }
     this.streamChunks(running ? 6 : 10);
-    this.audio.update(dt, this.settings.music > 0, this.daylight < 0.5 ? 1 : 0);
+    const pl = this.player, skyL = this.world.getLight(Math.floor(pl.x), Math.floor(pl.y + 1.6), Math.floor(pl.z)) >> 4;
+    this.audio.update(dt, this.settings.music > 0, skyL < 4 && pl.y < 55 ? 'cave' : this.daylight < 0.4 ? 'night' : this.daylight < 0.7 ? 'dusk' : 'day');
     this.render(dt);
     this.ui.updateHUD(this);
   }
@@ -499,7 +508,15 @@ export class Game {
         if (!groundBelow(w, p.x + dx - hw, p.z - hw, p.x + dx + hw, p.z + hw, p.y)) { dx = 0; p.vx = 0; }
         if (!groundBelow(w, p.x + dx - hw, p.z + dz - hw, p.x + dx + hw, p.z + dz + hw, p.y)) { dz = 0; p.vz = 0; }
       }
-      moveEntity(w, p, dx, p.vy * dt, dz);
+      const onLadder = CLIMB[w.getBlock(Math.floor(p.x), Math.floor(p.y + 0.1), Math.floor(p.z))] || CLIMB[w.getBlock(Math.floor(p.x), Math.floor(p.y + 1), Math.floor(p.z))];
+      if (onLadder) {
+        p.peakY = p.y;
+        if (jump || f > 0) p.vy = 3.2;
+        else if (sneakKey) p.vy = 0;
+        else p.vy = Math.max(p.vy, -2.4);
+      }
+      moveEntity(w, p, dx, p.vy * dt, dz, p.sneaking ? 0 : 0.55);
+      if (onLadder && (p.hitX || p.hitZ) && f > 0) p.vy = 3.2;
     }
     if ((p.hitX || p.hitZ) && !p.flying) p.sprinting = false;
 
@@ -750,8 +767,10 @@ export class Game {
     const w = this.world, p = this.player;
     const id = w.getBlock(x, y, z);
     if (!id || BLOCKS[id].hardness < 0) return;
+    const meta = w.getMeta(x, y, z);
     const key = `${x},${y},${z}`;
-    const te = w.tileEntities.get(key);
+    let te = w.tileEntities.get(key);
+    if (!te && id === B.CHEST) { const loot = this.natureLoot(x, y, z); if (loot) te = { slots: loot }; }
     if (te) {
       for (const s of te.slots) if (s) this.dropItem(x + 0.5, y + 0.5, z + 0.5, s);
       w.tileEntities.delete(key);
@@ -763,15 +782,20 @@ export class Game {
     this.spawnBlockParticles(x + 0.5, y + 0.5, z + 0.5, id, 26, 1);
     if (survival) {
       const held = p.held();
-      if (canHarvest(id, held)) for (const [did, n] of this.dropsFor(id)) this.dropItem(x + 0.5, y + 0.4, z + 0.5, { id: did, count: n });
+      if (canHarvest(id, held)) for (const [did, n] of this.dropsFor(id, meta)) this.dropItem(x + 0.5, y + 0.4, z + 0.5, { id: did, count: n });
       const tool = toolOf(held);
       if (tool && BLOCKS[id].hardness > 0) this.damageTool(tool.type === 'sword' ? 2 : 1);
       p.exhaustion += 0.005;
     }
   }
 
-  dropsFor(id) {
+  dropsFor(id, meta = 0) {
     const d = BLOCKS[id];
+    if (id === B.TALL_GRASS) return rand() < 0.125 ? [[I.SEEDS, 1]] : [];
+    if (id === B.WHEAT) return meta >= 7 ? [[I.WHEAT, 1], [I.SEEDS, 1 + Math.floor(rand() * 3)]] : [[I.SEEDS, 1]];
+    if (id === B.MELON) return [[I.MELON_SLICE, 3 + Math.floor(rand() * 5)]];
+    if (id === B.CHERRY_LEAVES) return rand() < 0.08 ? [[I.STICK, 1]] : [];
+    if (SHAPE[id] === 1 && meta === 2) return [[id, 2]];
     if (d.drop === null) return [];
     if (d.drop === 'leaves') {
       const out = [];
@@ -811,12 +835,32 @@ export class Game {
     const p = this.player, w = this.world;
     const held = p.held();
     if (hit && BLOCKS[hit.id].interact && !p.sneaking) {
-      this.openContainer(BLOCKS[hit.id].interact, hit);
+      if (BLOCKS[hit.id].interact === 'bed') this.sleep(hit);
+      else this.openContainer(BLOCKS[hit.id].interact, hit);
       return;
     }
     if (!held) return;
     const def = itemDef(held.id);
     const [dx, dy, dz] = this.lookDir();
+    const tool = toolOf(held);
+    if (tool && tool.type === 'hoe' && hit && hit.ny >= 0 && (hit.id === B.GRASS || hit.id === B.DIRT || hit.id === B.PODZOL || hit.id === B.SNOWY_GRASS)) {
+      const above = w.getBlock(hit.x, hit.y + 1, hit.z);
+      if (above && !REPLACEABLE[above]) return;
+      if (above) w.setBlock(hit.x, hit.y + 1, hit.z, 0);
+      w.setBlock(hit.x, hit.y, hit.z, B.FARMLAND);
+      this.audio.block('gravel', 'place');
+      this.swing();
+      if (p.mode === 'survival') this.damageTool(1);
+      return;
+    }
+    if (def.places !== undefined) {
+      if (!hit || hit.id !== B.FARMLAND || hit.ny !== 1 || w.getBlock(hit.x, hit.y + 1, hit.z) !== 0) return;
+      w.setBlock(hit.x, hit.y + 1, hit.z, def.places, 0);
+      this.audio.block('grass', 'place');
+      this.swing();
+      if (p.mode === 'survival') this.consumeHeld();
+      return;
+    }
     if (held.id === I.BUCKET) {
       const lh = raycast(w, p.x, p.y + p.eye, p.z, dx, dy, dz, 5, true);
       if (lh && LIQUID[lh.id]) {
@@ -828,6 +872,18 @@ export class Game {
       return;
     }
     if (!hit) return;
+    const hitY = p.y + p.eye + dy * hit.t;
+    // Two matching slabs become the full block.
+    if (SHAPE[held.id] === 1 && hit.id === held.id && BLOCKS[held.id].full !== undefined) {
+      const m = w.getMeta(hit.x, hit.y, hit.z);
+      if ((m === 0 && hit.ny === 1) || (m === 1 && hit.ny === -1)) {
+        w.setBlock(hit.x, hit.y, hit.z, BLOCKS[held.id].full);
+        this.audio.block(BLOCKS[held.id].sound, 'place');
+        this.swing();
+        if (p.mode === 'survival') this.consumeHeld();
+        return;
+      }
+    }
     let tx = hit.x + hit.nx, ty = hit.y + hit.ny, tz = hit.z + hit.nz;
     if (REPLACEABLE[hit.id] && !LIQUID[hit.id]) { tx = hit.x; ty = hit.y; tz = hit.z; }
     if (ty < 0 || ty >= CH) return;
@@ -853,7 +909,15 @@ export class Game {
     }
     let meta = 0;
     if (LOG[held.id]) meta = hit.nx ? 1 : hit.nz ? 2 : 0;
-    if (bd.support === 'torch') {
+    if (SHAPE[held.id] === 1) meta = hit.ny === -1 || (hit.ny === 0 && hitY - Math.floor(hitY) > 0.5) ? 1 : 0;
+    if (bd.support === 'wall') {
+      if (hit.ny !== 0 || !OPAQUE[w.getBlock(hit.x, hit.y, hit.z)]) return;
+      meta = hit.nx === 1 ? 1 : hit.nx === -1 ? 2 : hit.nz === 1 ? 3 : 4;
+    } else if (bd.support === 'lantern') {
+      if (hit.ny === -1 && SOLID[w.getBlock(hit.x, hit.y, hit.z)]) meta = 1;
+      else if (SOLID[w.getBlock(tx, ty - 1, tz)]) meta = 0;
+      else return;
+    } else if (bd.support === 'torch') {
       const support = w.getBlock(hit.x, hit.y, hit.z);
       if (hit.ny === 1 && OPAQUE[support]) meta = 0;
       else if (hit.ny === 0 && OPAQUE[support]) meta = hit.nx === 1 ? 1 : hit.nx === -1 ? 2 : hit.nz === 1 ? 3 : 4;
@@ -884,6 +948,14 @@ export class Game {
         return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => w.getBlock(x + dx, y - 1, z + dz) === B.WATER);
       }
       case 'cactus': return below === B.SAND || below === B.CACTUS;
+      case 'wall': {
+        const off = [null, [-1, 0], [1, 0], [0, -1], [0, 1]][meta] || [0, -1];
+        return !!OPAQUE[w.getBlock(x + off[0], y, z + off[1])];
+      }
+      case 'lantern': return meta === 1 ? !!SOLID[w.getBlock(x, y + 1, z)] : !!SOLID[below];
+      case 'crop': return below === B.FARMLAND;
+      case 'mushroom': return !!OPAQUE[below];
+      case 'any': return !!SOLID[below] || !!SOLID[w.getBlock(x, y + 1, z)];
       case 'torch': {
         if (!meta) return !!OPAQUE[below];
         const off = [null, [-1, 0], [1, 0], [0, -1], [0, 1]][meta];
@@ -923,7 +995,7 @@ export class Game {
     }
     if (d.support && !this.supported(x, y, z, id, w.getMeta(x, y, z))) {
       w.setBlock(x, y, z, 0);
-      if (this.player.mode === 'survival' || id === B.CACTUS) for (const [did, n] of this.dropsFor(id)) this.dropItem(x + 0.5, y + 0.3, z + 0.5, { id: did, count: n });
+      if (this.player.mode === 'survival' || id === B.CACTUS) for (const [did, n] of this.dropsFor(id, w.getMeta(x, y, z))) this.dropItem(x + 0.5, y + 0.3, z + 0.5, { id: did, count: n });
       this.spawnBlockParticles(x + 0.5, y + 0.5, z + 0.5, id, 8, 0.6);
     }
   }
@@ -970,10 +1042,48 @@ export class Game {
     }
   }
 
+  sleep(hit) {
+    const p = this.player, w = this.world;
+    p.spawn = [hit.x + 0.5, hit.y + 1, hit.z + 0.5];
+    const night = w.time > 12600 && w.time < 23400;
+    if (!night && !this.storm) { this.ui.chat('Spawn point set. You can only sleep at night or during storms.'); return; }
+    const hostile = this.entities.some((e) => e instanceof Mob && e.def.hostile && e.health > 0 && Math.hypot(e.x - p.x, e.y - p.y, e.z - p.z) < 8);
+    if (hostile) { this.ui.chat('You may not rest now; there are ghouls nearby.', 'warn'); return; }
+    w.time = 0;
+    w.day = (w.day || 0) + 1;
+    this.weather.rain = 0; this.weather.timer = 2000 + rand() * 8000; this.weather.target = 0;
+    this.ui.sleepFade();
+    this.ui.chat('You slept through the night. Spawn point set.');
+  }
+
+  // Chests generated with the world get their loot the first time they are opened.
+  natureLoot(x, y, z) {
+    const c = this.world.getChunk(x >> 4, z >> 4);
+    if (!c || c.mods.has((y << 8) | ((z & 15) << 4) | (x & 15))) return null;
+    let seed = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791) ^ this.world.seed) >>> 0;
+    const rnd = () => { seed = (Math.imul(seed ^ (seed >>> 15), 2246822507) + 0x9e3779b9) >>> 0; return seed / 4294967296; };
+    const table = [[I.COAL, 1, 8, 1], [I.IRON_INGOT, 1, 5, 0.6], [I.GOLD_INGOT, 1, 3, 0.35], [I.DIAMOND, 1, 2, 0.12], [I.BREAD, 1, 3, 0.6],
+      [I.APPLE, 1, 4, 0.5], [I.SEEDS, 2, 6, 0.5], [I.COPPER_INGOT, 2, 7, 0.5], [B.TORCH, 4, 12, 0.6], [I.IRON_PICKAXE, 1, 1, 0.15],
+      [I.STONE_SWORD, 1, 1, 0.25], [I.BUCKET, 1, 1, 0.2], [B.LANTERN, 1, 2, 0.2], [I.ROTTEN_FLESH, 1, 5, 0.4], [B.CRYSTAL_CLUSTER, 1, 3, 0.15]];
+    const slots = new Array(27).fill(null);
+    for (const [id, lo, hi, chance] of table) {
+      if (rnd() > chance) continue;
+      const n = lo + Math.floor(rnd() * (hi - lo + 1));
+      let i = Math.floor(rnd() * 27);
+      while (slots[i]) i = (i + 1) % 27;
+      slots[i] = { id, count: Math.min(n, maxStackOf(id)) };
+    }
+    return slots;
+  }
+
   openContainer(kind, hit) {
     const key = `${hit.x},${hit.y},${hit.z}`;
     const w = this.world;
     let te = w.tileEntities.get(key);
+    if (kind === 'chest' && !te) {
+      const loot = this.natureLoot(hit.x, hit.y, hit.z);
+      if (loot) w.tileEntities.set(key, (te = { type: 'chest', slots: loot }));
+    }
     if (kind === 'chest' && !te) w.tileEntities.set(key, (te = { type: 'chest', slots: new Array(27).fill(null) }));
     if (kind === 'furnace' && !te) w.tileEntities.set(key, (te = { type: 'furnace', slots: [null, null, null], burn: 0, burnMax: 0, cook: 0 }));
     this.audio.block('wood', 'place');
@@ -987,6 +1097,11 @@ export class Game {
     w.time += 1;
     if (w.time >= 24000) { w.time -= 24000; w.day = (w.day || 0) + 1; }
     w.tickFluids();
+    const wt = this.weather;
+    if (--wt.timer <= 0) {
+      if (wt.target > 0) { wt.target = 0; wt.timer = 12000 + rand() * 24000; }
+      else { wt.target = 0.6 + rand() * 0.4; wt.thunder = rand() < 0.35; wt.timer = 4000 + rand() * 8000; }
+    }
     this.randomTicks();
     this.tickFurnaces();
     this.spawnT++;
@@ -1002,6 +1117,14 @@ export class Game {
       for (let k = 0; k < 20; k++) {
         const i = (rand() * 32768) | 0;
         const id = c.blocks[i];
+        if (id === B.WHEAT) {
+          const m = c.meta[i];
+          const L = c.light[i];
+          if (m < 7 && Math.max((L >> 4) * this.daylight, L & 15) >= 8 && rand() < 0.35) {
+            w.setBlock(c.cx * 16 + (i & 15), i >> 8, c.cz * 16 + ((i >> 4) & 15), B.WHEAT, m + 1);
+          }
+          continue;
+        }
         if (id === B.SUGAR_CANE) {
           if (rand() < 0.15 && i + 256 < 32768 && c.blocks[i + 256] === 0) {
             const x = c.cx * 16 + (i & 15), y = i >> 8, z = c.cz * 16 + ((i >> 4) & 15);
@@ -1154,16 +1277,22 @@ export class Game {
     if (this.torchScanT <= 0) {
       this.torchScanT = 2;
       const list = [];
+      let water = 0, leaves = 0;
       const pcx = Math.floor(p.x / 16), pcz = Math.floor(p.z / 16);
       const y0 = Math.max(0, Math.floor(p.y) - 20), y1 = Math.min(CH - 1, Math.floor(p.y) + 20);
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
         const c = w.getChunk(pcx + dx, pcz + dz);
         if (!c) continue;
         for (let i = y0 << 8; i < (y1 + 1) << 8; i++) {
-          if (c.blocks[i] === B.TORCH) list.push([c.cx * 16 + (i & 15), i >> 8, c.cz * 16 + ((i >> 4) & 15), c.meta[i]]);
+          const b = c.blocks[i];
+          if (b === B.TORCH) list.push([c.cx * 16 + (i & 15), i >> 8, c.cz * 16 + ((i >> 4) & 15), c.meta[i]]);
+          else if (b === B.WATER) water++;
+          else if (BLOCKS[b].leaf) leaves++;
         }
       }
       this.torches = list;
+      this.nearWater = Math.min(1, water / 900);
+      this.nearLeaves = Math.min(1, leaves / 500);
     }
     if (!this.torches || !this.torches.length) return;
     this.flameT = (this.flameT || 0) - dt;
@@ -1204,18 +1333,24 @@ export class Game {
     const sunDir = [Math.cos(ang), Math.sin(ang), 0];
     const sh = sunDir[1];
     const day = smooth((sh + 0.2) / 0.5);
-    this.daylight = 0.18 + 0.82 * smooth((sh + 0.12) / 0.4);
+    const rain = this.weather.rain * this.precipHere;
+    const wet = this.weather.rain;
+    this.daylight = (0.18 + 0.82 * smooth((sh + 0.12) / 0.4)) * (1 - 0.38 * wet) + this.weather.flash * 0.6;
     const mixc = (a, b, k) => [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)];
-    const top = mixc([0.01, 0.014, 0.04], [0.32, 0.56, 0.98], day);
-    const horizon = mixc([0.035, 0.05, 0.1], [0.7, 0.83, 1.0], day);
-    const sunsetK = Math.exp(-((sh / 0.2) ** 2));
+    let top = mixc([0.01, 0.014, 0.04], [0.32, 0.56, 0.98], day);
+    let horizon = mixc([0.035, 0.05, 0.1], [0.7, 0.83, 1.0], day);
+    const grey = [0.42 * day + 0.03, 0.45 * day + 0.035, 0.5 * day + 0.05];
+    top = mixc(top, grey, wet * 0.85);
+    horizon = mixc(horizon, grey, wet * 0.75);
+    if (this.weather.flash > 0) { top = mixc(top, [0.9, 0.92, 1], this.weather.flash * 0.6); horizon = mixc(horizon, [0.9, 0.92, 1], this.weather.flash * 0.5); }
+    const sunsetK = Math.exp(-((sh / 0.2) ** 2)) * (1 - wet * 0.8);
     const sunset = [1.0 * sunsetK * 0.9, 0.42 * sunsetK * 0.9, 0.16 * sunsetK * 0.9];
     const [lx, , lz] = this.lookDir();
     const toward = Math.max(0, lx * sunDir[0] + lz * sunDir[2]);
     const fog = [horizon[0] + sunset[0] * toward * 0.45, horizon[1] + sunset[1] * toward * 0.45, horizon[2] + sunset[2] * toward * 0.45];
-    const cloud = mixc([0.1, 0.11, 0.16], [1, 1, 1], day);
+    const cloud = mixc(mixc([0.1, 0.11, 0.16], [1, 1, 1], day), grey, wet * 0.7);
     cloud[0] += sunset[0] * 0.4; cloud[1] += sunset[1] * 0.3;
-    return { sunDir, top, horizon, sunset, night: 1 - smooth((sh + 0.28) / 0.3), starRot: ang, fog, cloud };
+    return { sunDir, top, horizon, sunset, night: (1 - smooth((sh + 0.28) / 0.3)) * (1 - wet), starRot: ang, fog, cloud, rain };
   }
 
   cameraState() {
@@ -1243,13 +1378,112 @@ export class Game {
     return { x, y, z, yaw, pitch, roll, fov };
   }
 
+  // Precipitation kind at the player: 0 none (dry biomes), 1 rain, 2 snow.
+  precipKind() {
+    const p = this.player;
+    const col = this.gen.column(Math.floor(p.x), Math.floor(p.z));
+    if (col.T > 0.3 && col.H < 0.12) return 0;
+    if (col.T < -0.15 || p.y > 110) return 2;
+    return 1;
+  }
+
+  updateWeather(dt) {
+    const wt = this.weather, p = this.player;
+    wt.rain += (wt.target - wt.rain) * Math.min(1, dt * 0.08);
+    if (wt.rain < 0.002) wt.rain = 0;
+    this.precipKind_ = this.precipKind();
+    this.precipHere = this.precipKind_ ? 1 : 0;
+    this.storm = wt.thunder && wt.rain > 0.5;
+    wt.flash = Math.max(0, wt.flash - dt * 3);
+    if (this.storm && this.state === 'play') {
+      wt.boltT -= dt;
+      if (wt.boltT <= 0) {
+        wt.boltT = 6 + rand() * 22;
+        wt.flash = 1;
+        this.audio.thunder(0.6 + rand() * 2.4, 0.5 + rand() * 0.5);
+      }
+    }
+    const L = this.world.getLight(Math.floor(p.x), Math.floor(p.y + p.eye), Math.floor(p.z));
+    const exposure = (L >> 4) / 15;
+    const top = this.world.topAt(Math.floor(p.x), Math.floor(p.z));
+    const under = Math.max(0, Math.min(1, 1 - (top - p.y - p.eye) / 8));
+    this.audio.ambience({
+      rain: this.precipKind_ === 1 ? wt.rain * Math.max(exposure, 0.15) * (top > p.y + p.eye ? 0.55 : 1) : 0,
+      wind: Math.min(1, Math.max(0, (p.y - 70) / 50)) * 0.7 * exposure + (this.precipKind_ === 2 ? wt.rain * 0.5 : 0) + wt.rain * 0.15,
+      cave: (1 - exposure) * (p.y < 55 ? 1 : 0.3) * (1 - under * 0.5),
+      day: this.daylight, exposure, underwater: p.eyeLiquid === 1,
+      water: this.nearWater || 0, forest: this.nearLeaves || 0,
+    }, dt);
+  }
+
+  // Rain streaks / snowflakes in a disc around the camera, stopping at the first block from the sky.
+  weatherMesh(cam, dt) {
+    const wt = this.weather, kind = this.precipKind_;
+    if (!kind || wt.rain < 0.02) return null;
+    const buf = this.weatherBuf;
+    buf.reset();
+    const w = this.world, t = this.time;
+    const cx = Math.floor(cam.x), cz = Math.floor(cam.z);
+    const R = 11, layer = kind === 1 ? LAYERS.rain : LAYERS.snowflake;
+    const L = w.getLight(cx, Math.floor(cam.y), cz);
+    const sky = Math.max(70, (L >> 4) * 17);
+    for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
+      if (dx * dx + dz * dz > R * R) continue;
+      const x = cx + dx, z = cz + dz;
+      const h = hash2(x, z, 913);
+      if (h > wt.rain) continue;
+      const top = w.topAt(x, z) + 1;
+      const yTop = cam.y + 14, yBot = Math.max(top, cam.y - 10);
+      if (yBot >= yTop) continue;
+      const span = yTop - yBot;
+      const ox = x + 0.2 + hash2(x, z, 77) * 0.6, oz = z + 0.2 + hash2(z, x, 78) * 0.6;
+      const rx = -(oz - cam.z), rz = ox - cam.x, rl = Math.hypot(rx, rz) || 1;
+      const ux = rx / rl, uz = rz / rl;
+      for (let k = 0; k < 2; k++) {
+        if (kind === 1) {
+          const speed = 14 + h * 6, len = 0.9;
+          let y = yTop - ((t * speed + h * 97 + k * span * 0.5) % span);
+          if (y - len < yBot) continue;
+          const hw = 0.03;
+          buf.ensure(4);
+          const X = ox - cam.x, Z = oz - cam.z;
+          buf.v(X - ux * hw, y - len - cam.y, Z - uz * hw, 0, 1, layer, sky, 0, 230, 0, 255, 255, 255);
+          buf.v(X + ux * hw, y - len - cam.y, Z + uz * hw, 1, 1, layer, sky, 0, 230, 0, 255, 255, 255);
+          buf.v(X + ux * hw, y - cam.y, Z + uz * hw, 1, 0, layer, sky, 0, 230, 0, 255, 255, 255);
+          buf.v(X - ux * hw, y - cam.y, Z - uz * hw, 0, 0, layer, sky, 0, 230, 0, 255, 255, 255);
+        } else {
+          const speed = 1.6 + h, s = 0.07;
+          const y = yTop - ((t * speed + h * 53 + k * span * 0.5) % span);
+          const X = ox - cam.x + Math.sin(t * 1.3 + h * 20 + k) * 0.35, Z = oz - cam.z + Math.cos(t * 1.1 + h * 17) * 0.35;
+          buf.ensure(4);
+          buf.v(X - ux * s, y - s - cam.y, Z - uz * s, 0, 1, layer, sky, 0, 255, 0, 255, 255, 255);
+          buf.v(X + ux * s, y - s - cam.y, Z + uz * s, 1, 1, layer, sky, 0, 255, 0, 255, 255, 255);
+          buf.v(X + ux * s, y + s - cam.y, Z + uz * s, 1, 0, layer, sky, 0, 255, 0, 255, 255, 255);
+          buf.v(X - ux * s, y + s - cam.y, Z - uz * s, 0, 0, layer, sky, 0, 255, 0, 255, 255, 255);
+        }
+      }
+      // Occasional splashes where rain lands.
+      if (kind === 1 && top > cam.y - 10 && rand() < dt * 0.6 * wt.rain && this.particles.length < 700) {
+        this.particles.push({ x: ox, y: top + 0.05, z: oz, vx: (rand() - 0.5) * 0.8, vy: 1.4, vz: (rand() - 0.5) * 0.8, life: 0.25, size: 0.03,
+          layer: LAYERS.white, u: 0, v: 0, uvs: 1, tint: [190, 210, 255], bright: 220, light: [sky, 0], grav: 12 });
+      }
+    }
+    return buf.n ? buf.slice() : null;
+  }
+
+  selectionBox(t) {
+    const [y0, y1] = SHAPE[t.id] ? blockSpan(t.id, this.world.getMeta(t.x, t.y, t.z)) : [0, 1];
+    return { x: t.x, y: t.y, z: t.z, y0, y1 };
+  }
+
   render(dt) {
     const p = this.player, w = this.world;
     const cam = this.cameraState();
     const sky = this.skyState(cam);
     const R = this.state === 'menu' ? Math.min(this.settings.renderDist, 7) : this.settings.renderDist;
     const far = R * 16 + 24;
-    let fog = { color: sky.fog, start: R * 16 * 0.55, end: R * 16 * 0.95 };
+    const wet = this.weather.rain;
+    let fog = { color: sky.fog, start: R * 16 * 0.55 * (1 - wet * 0.55), end: R * 16 * 0.95 * (1 - wet * 0.3) };
     const eyeLiquid = LIQUID[w.getBlock(Math.floor(cam.x), Math.floor(cam.y), Math.floor(cam.z))];
     if (eyeLiquid === 1) fog = { color: [0.06 * this.daylight + 0.01, 0.16 * this.daylight + 0.02, 0.38 * this.daylight + 0.05], start: 0, end: 28 };
     else if (eyeLiquid === 2) fog = { color: [0.85, 0.3, 0.05], start: 0, end: 2.5 };
@@ -1289,10 +1523,17 @@ export class Game {
       cam, far, fog, daylight: this.daylight, time: this.time, gamma: this.settings.gamma,
       sky: { sunDir: sky.sunDir, top: sky.top, horizon: sky.horizon, sunset: sky.sunset, night: sky.night, starRot: sky.starRot },
       chunks: this.chunkList || [], entities: ents, particles: this.particles, shadows,
-      selection: this.state === 'play' && this.target && !this.hudHidden ? this.target : null,
+      selection: this.state === 'play' && this.target && !this.hudHidden ? this.selectionBox(this.target) : null,
+      post: this.settings.post,
       crack: this.mining && this.mining.progress > 0 ? { x: this.mining.x, y: this.mining.y, z: this.mining.z, stage: Math.floor(this.mining.progress * 10) } : null,
       clouds: this.settings.clouds ? { offset: this.cloudOffset, color: sky.cloud } : null,
       underwater: eyeLiquid === 1,
+      inLava: eyeLiquid === 2,
+      weather: this.state !== 'menu' ? this.weatherMesh(cam, dt) : null,
+      cloudCover: wet,
+      moonPhase: ((w.day || 0) % 8),
+      flicker: 0.93 + 0.07 * Math.sin(this.time * 9.1) * Math.sin(this.time * 5.3 + 1.7),
+      hurt: p.hurtT,
       hand: this.state !== 'menu' && this.cameraMode === 0 && p.alive && !this.hudHidden ? this.handState(dt, [(L >> 4) / 15, (L & 15) / 15]) : null,
     };
     this.renderer.render(frame);

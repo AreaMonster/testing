@@ -1,9 +1,9 @@
 // Builds chunk geometry with smooth lighting and ambient occlusion.
 // Vertex layout: f32 [x,y,z,u,v,layer] + u8 [sky,block,bright,flags,r,g,b,0].
-import { B, OPAQUE, RENDER, TINT, CULLSAME, LIQUID, LEAF, LOG, TEXL, FRONTL, BLOCKS, R } from './blocks.js';
+import { B, OPAQUE, RENDER, TINT, CULLSAME, LIQUID, LEAF, LOG, TEXL, FRONTL, BLOCKS, R, blockSpan } from './blocks.js';
 import { CH } from './consts.js';
 import { hash2 } from './noise.js';
-import { BIRCH_TINT, SPRUCE_TINT } from './textures.js';
+import { BIRCH_TINT, SPRUCE_TINT, LAYERS } from './textures.js';
 
 const PX = 18, OX = 1, OZ = PX, OY = PX * PX;
 const PSIZE = PX * PX * (CH + 2);
@@ -123,6 +123,11 @@ export function buildChunkMesh(world, chunk, opts = {}) {
         else if (rt === R.CROSS) cross(ob, b, p, x, y, z);
         else if (rt === R.TORCH) torch(ob, b, p, x, y, z);
         else if (rt === R.LIQUID) liquid(LIQUID[b] === 1 ? wb : ob, b, p, x, y, z);
+        else if (rt === R.GLASS) cubeFaces(wb, b, p, x, y, z, rt, true);
+        else if (rt === R.SLAB) slabBox(ob, b, p, x, y, z);
+        else if (rt === R.LADDER) ladder(ob, b, p, x, y, z);
+        else if (rt === R.LANTERN) lantern(ob, b, p, x, y, z);
+        else if (rt === R.CROP) crop(ob, b, p, x, y, z);
         if (ob.n + wb.n !== before) { if (y < minY) minY = y; if (y > maxY) maxY = y; }
       }
     }
@@ -263,18 +268,97 @@ function liquid(buf, b, p, x, y, z) {
   }
 }
 
+// Partial-height box (slabs, bedrolls) with flat per-face lighting.
+function slabBox(buf, b, p, x, y, z) {
+  const [y0, y1] = blockSpan(b, pm[p]);
+  const own = pl[p];
+  const front = BLOCKS[b].front;
+  for (let f = 0; f < 6; f++) {
+    const np = p + NOFF[f];
+    if (f === 2 && y1 === 1 && OPAQUE[pb[np]]) continue;
+    if (f === 3 && y0 === 0 && OPAQUE[pb[np]]) continue;
+    if (f !== 2 && f !== 3 && OPAQUE[pb[np]]) continue;
+    const L = (f === 2 && y1 < 1) || (f === 3 && y0 > 0) ? own : pl[np] || own;
+    const s = (L >> 4) * 17, bl = (L & 15) * 17, sh = SHADE[f] * 255;
+    const layer = front && f === 5 ? FRONTL[b] : TEXL[b * 6 + f];
+    const cp = CPOS[f];
+    buf.ensure(4);
+    for (let k = 0; k < 4; k++) {
+      const c = cp[k];
+      const cy = c[1] ? y1 : y0;
+      let v = UVS[k][1];
+      if (f !== 2 && f !== 3) v = 1 - cy;
+      buf.v(x + c[0], y + cy, z + c[2], UVS[k][0], v, layer, s, bl, sh, 0, 255, 255, 255);
+    }
+  }
+}
+
+// Ladder: a thin double-sided panel against its wall (meta = wall direction like torches).
+function ladder(buf, b, p, x, y, z) {
+  const L = pl[p], s = (L >> 4) * 17, bl = (L & 15) * 17, layer = TEXL[b * 6];
+  const w = TORCH_WALL[pm[p]] || [0, -1];
+  const d = 0.06;
+  let pts;
+  if (w[0]) { const px = w[0] < 0 ? d : 1 - d; pts = [[px, 0, 0], [px, 0, 1], [px, 1, 1], [px, 1, 0]]; }
+  else { const pz = w[1] < 0 ? d : 1 - d; pts = [[0, 0, pz], [1, 0, pz], [1, 1, pz], [0, 1, pz]]; }
+  const uv = [[0, 1], [1, 1], [1, 0], [0, 0]];
+  buf.ensure(8);
+  for (let k = 0; k < 4; k++) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 220, 0, 255, 255, 255);
+  for (let k = 3; k >= 0; k--) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 200, 0, 255, 255, 255);
+}
+
+function boxAt(buf, x, y, z, x0, y0, z0, x1, y1, z1, layer, s, bl) {
+  for (let f = 0; f < 6; f++) {
+    const cp = CPOS[f];
+    buf.ensure(4);
+    for (let k = 0; k < 4; k++) {
+      const c = cp[k];
+      const px = c[0] ? x1 : x0, py = c[1] ? y1 : y0, pz = c[2] ? z1 : z0;
+      let u, v;
+      if (f === 0 || f === 1) { u = f === 0 ? 1 - pz : pz; v = 1 - py; }
+      else if (f === 2 || f === 3) { u = px; v = pz; }
+      else { u = f === 4 ? px : 1 - px; v = 1 - py; }
+      buf.v(x + px, y + py, z + pz, u, v, layer, s, bl, SHADE[f] * 255, 0, 255, 255, 255);
+    }
+  }
+}
+
+// Lantern: a small glowing box with a cap; meta 1 hangs it from the ceiling.
+function lantern(buf, b, p, x, y, z) {
+  const L = pl[p], s = (L >> 4) * 17, bl = (L & 15) * 17, layer = TEXL[b * 6];
+  const oy = pm[p] === 1 ? 0.3 : 0;
+  boxAt(buf, x, y, z, 5 / 16, oy, 5 / 16, 11 / 16, oy + 7 / 16, 11 / 16, layer, s, bl);
+  boxAt(buf, x, y, z, 6 / 16, oy + 7 / 16, 6 / 16, 10 / 16, oy + 9 / 16, 10 / 16, LAYERS.lantern_cap, s, bl);
+  if (oy) boxAt(buf, x, y, z, 7.5 / 16, oy + 9 / 16, 7.5 / 16, 8.5 / 16, 1, 8.5 / 16, LAYERS.lantern_cap, s, bl);
+}
+
+// Crops: four planes in a # pattern; growth stage picks the texture.
+function crop(buf, b, p, x, y, z) {
+  const L = pl[p], s = (L >> 4) * 17, bl = (L & 15) * 17;
+  const layer = LAYERS[`wheat_${Math.min(3, pm[p] >> 1)}`];
+  const planes = [[0.25, 0, 0.25, 1], [0.75, 0, 0.75, 1], [0, 0.25, 1, 0.25], [0, 0.75, 1, 0.75]];
+  buf.ensure(32);
+  for (const [x0, z0, x1, z1] of planes) {
+    const q = [[x0, 0, z0, 0, 1], [x1, 0, z1, 1, 1], [x1, 1, z1, 1, 0], [x0, 1, z0, 0, 0]];
+    for (const v of q) buf.v(x + v[0], y + v[1] - 1 / 16, z + v[2], v[3], v[4], layer, s, bl, 230, v[1] ? 4 : 0, 255, 255, 255);
+    for (let k = 3; k >= 0; k--) { const v = q[k]; buf.v(x + v[0], y + v[1] - 1 / 16, z + v[2], v[3], v[4], layer, s, bl, 230, v[1] ? 4 : 0, 255, 255, 255); }
+  }
+}
+
 // Small standalone meshes (held items, dropped items, falling blocks).
 export function blockItemMesh(id, defaultTint) {
   const d = BLOCKS[id];
   const buf = new MeshBuf(64);
-  if (d.render === R.CUBE || d.render === R.CUTOUT) {
+  if (d.render === R.CUBE || d.render === R.CUTOUT || d.render === R.GLASS || d.render === R.SLAB) {
+    const [y0, y1] = d.render === R.SLAB ? blockSpan(id, 0) : [0, 1];
     for (let f = 0; f < 6; f++) {
       const layer = d.front && f === 4 ? FRONTL[id] : TEXL[id * 6 + f];
       const tint = TINT[id] === 4 ? BIRCH_TINT : TINT[id] === 5 ? SPRUCE_TINT : (TINT[id] && (TINT[id] !== 1 || f === 2)) ? defaultTint : [255, 255, 255];
       const cp = CPOS[f];
       for (let k = 0; k < 4; k++) {
         const c = cp[k];
-        buf.v(c[0] - 0.5, c[1] - 0.5, c[2] - 0.5, UVS[k][0], UVS[k][1], layer, 255, 0, SHADE[f] * 255, 0, tint[0], tint[1], tint[2]);
+        const cy = c[1] ? y1 : y0;
+        buf.v(c[0] - 0.5, cy - 0.5, c[2] - 0.5, UVS[k][0], f === 2 || f === 3 ? UVS[k][1] : 1 - cy, layer, 255, 0, SHADE[f] * 255, 0, tint[0], tint[1], tint[2]);
       }
     }
     return buf.slice();
