@@ -151,6 +151,14 @@ blk('WHEAT', 'Wheat Crop', { tex: 'wheat_3', render: R.CROP, solid: false, opaqu
 blk('BEDROLL', 'Bedroll', { tex: { top: 'bedroll_top', side: 'bedroll_side', bottom: 'planks_oak' }, render: R.SLAB, opaque: false, shape: 'bed', hardness: 0.3, sound: 'wool', interact: 'bed', front: true });
 blk('BOOKSHELF_EMPTY', 'Shelf', { tex: { top: 'planks_oak', side: 'shelf' }, hardness: 1.5, tool: 'axe', sound: 'wood', fuel: 15, creative: true });
 blk('GLOW_LICHEN_STONE', 'Glowing Stone', { tex: 'glowstone_vein', hardness: 1.5, tool: 'pickaxe', tier: 1, light: 9 });
+// ---- Added in the mobs & structures update ----
+blk('JUNGLE_LOG', 'Jungle Log', { tex: { top: 'log_jungle_top', side: 'log_jungle' }, hardness: 2, tool: 'axe', sound: 'wood', fuel: 15, log: true });
+blk('JUNGLE_LEAVES', 'Jungle Leaves', { tex: 'leaves_jungle', render: R.CUTOUT, opaque: false, filter: 1, hardness: 0.2, sound: 'grass', tint: 3, drop: 'leaves', leaf: true });
+blk('JUNGLE_PLANKS', 'Jungle Planks', { tex: 'planks_jungle', hardness: 2, tool: 'axe', sound: 'wood', fuel: 15 });
+blk('VINES', 'Vines', { tex: 'vines', render: R.LADDER, solid: false, opaque: false, hardness: 0.2, sound: 'grass', support: 'vine', climb: true, tint: 3, replaceable: true, drop: null });
+blk('COBWEB', 'Cobweb', { tex: 'cobweb', render: R.CROSS, solid: false, opaque: false, hardness: 4, tool: 'sword', sound: 'wool', drop: 'STRING', web: true });
+blk('PATH', 'Dirt Path', { tex: { top: 'path_top', side: 'path_side', bottom: 'dirt' }, hardness: 0.6, tool: 'shovel', sound: 'gravel', drop: 'DIRT' });
+blk('FENCE_POST', 'Wooden Post', { tex: { top: 'log_oak_top', side: 'log_oak' }, hardness: 2, tool: 'axe', sound: 'wood', log: true, fuel: 15 });
 for (const k of ['LOG', 'BIRCH_LOG', 'SPRUCE_LOG', 'ACACIA_LOG']) BLOCKS[B[k]].log = true;
 
 // ---- Items (ids from 256) ----
@@ -197,6 +205,17 @@ itm('WHEAT', 'Wheat');
 itm('BREAD', 'Bread', { food: 5 });
 itm('MELON_SLICE', 'Melon Slice', { food: 2 });
 itm('MUSHROOM_STEW', 'Mushroom Stew', { food: 6, maxStack: 1 });
+itm('FEATHER', 'Feather');
+itm('FLINT', 'Flint');
+itm('RAW_CHICKEN', 'Raw Chicken', { food: 2 });
+itm('COOKED_CHICKEN', 'Cooked Chicken', { food: 6 });
+itm('RAW_RABBIT', 'Raw Rabbit', { food: 3 });
+itm('COOKED_RABBIT', 'Cooked Rabbit', { food: 5 });
+itm('BONE', 'Bone');
+itm('STRING', 'String');
+itm('ARROW', 'Arrow');
+itm('BOW', 'Bow', { maxStack: 1, bow: true, tool: { type: 'bow', tier: 0, speed: 1, dmg: 1, dur: 384 } });
+itm('EGG', 'Egg', { maxStack: 16 });
 for (const [m, n, tier, speed, dur] of TOOL_MATS) {
   itm(`${m}_HOE`, `${n} Hoe`, { tex: `${m.toLowerCase()}_hoe`, maxStack: 1, tool: { type: 'hoe', tier, speed, dmg: 1, dur }, fuel: tier === 1 ? 10 : 0 });
 }

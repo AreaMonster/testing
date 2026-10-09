@@ -148,13 +148,19 @@ function tintOf(b, f, x, z) {
 function cubeFaces(buf, b, p, x, y, z, rt, fancy) {
   const isLeaf = LEAF[b];
   const vflags = isLeaf ? 16 : 0;
+  // A leaf completely surrounded by leaves/solids can't be seen through its leafy sides.
+  let buried = false;
+  if (isLeaf) {
+    buried = true;
+    for (let f = 0; f < 6; f++) { const nb = pb[p + NOFF[f]]; if (!LEAF[nb] && !OPAQUE[nb]) { buried = false; break; } }
+  }
   const front = BLOCKS[b].front;
   for (let f = 0; f < 6; f++) {
     const np = p + NOFF[f];
     const nb = pb[np];
     if (OPAQUE[nb]) continue;
     if (nb === b && CULLSAME[b]) continue;
-    if (isLeaf && !fancy && LEAF[nb]) continue;
+    if (isLeaf && LEAF[nb] && (!fancy || buried)) continue;
     let layer = front && f === (pm[p] || 0) ? FRONTL[b] : TEXL[b * 6 + f];
     if (LOG[b] && pm[p]) {
       const end = pm[p] === 1 ? f === 0 || f === 1 : f === 4 || f === 5;
@@ -303,8 +309,9 @@ function ladder(buf, b, p, x, y, z) {
   else { const pz = w[1] < 0 ? d : 1 - d; pts = [[0, 0, pz], [1, 0, pz], [1, 1, pz], [0, 1, pz]]; }
   const uv = [[0, 1], [1, 1], [1, 0], [0, 0]];
   buf.ensure(8);
-  for (let k = 0; k < 4; k++) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 220, 0, 255, 255, 255);
-  for (let k = 3; k >= 0; k--) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 200, 0, 255, 255, 255);
+  const [tr, tg, tb] = tintOf(b, 0, x, z);
+  for (let k = 0; k < 4; k++) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 220, 0, tr, tg, tb);
+  for (let k = 3; k >= 0; k--) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 200, 0, tr, tg, tb);
 }
 
 function boxAt(buf, x, y, z, x0, y0, z0, x1, y1, z1, layer, s, bl) {

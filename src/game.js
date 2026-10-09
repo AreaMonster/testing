@@ -2,10 +2,10 @@
 import { Renderer } from './renderer.js';
 import { buildChunkMesh } from './mesher.js';
 import { World, ckey } from './world.js';
-import { WorldGen, BIOME_NAMES, placeTree } from './worldgen.js';
+import { WorldGen, BIOME, BIOME_NAMES, placeTree } from './worldgen.js';
 import { B, I, BLOCKS, ITEMS, OPAQUE, SOLID, LIQUID, REPLACEABLE, TEXL, LOG, SHAPE, CLIMB, blockSpan, itemDef, itemName, maxStackOf, canHarvest, breakTime, toolOf, nameToId } from './blocks.js';
 import { Inventory, SMELT, SMELT_TIME, fuelTime } from './crafting.js';
-import { Entity, ItemEntity, FallingBlock, Mob, MOB_TYPES, poseDraws, mobParts } from './entities.js';
+import { Entity, ItemEntity, FallingBlock, Mob, Arrow, MOB_TYPES, poseDraws, mobParts } from './entities.js';
 import { moveEntity, raycast, rayBox, entityBox, groundBelow, boxTouches } from './physics.js';
 import { Mat4, clamp, smooth, lerp } from './math.js';
 import { CH, SEA, TICK } from './consts.js';
@@ -147,7 +147,7 @@ export class Game {
     this.fpsN = 0;
     this.lastTap = {};
     this.offsets = [];
-    for (let dz = -20; dz <= 20; dz++) for (let dx = -20; dx <= 20; dx++) this.offsets.push([dx, dz, dx * dx + dz * dz]);
+    for (let dz = -36; dz <= 36; dz++) for (let dx = -36; dx <= 36; dx++) if (dx * dx + dz * dz <= 36 * 36) this.offsets.push([dx, dz, dx * dx + dz * dz]);
     this.offsets.sort((a, b) => a[2] - b[2]);
     this.M = new Mat4();
     this.unloadT = 0;
@@ -358,20 +358,60 @@ export class Game {
     return ready / total;
   }
 
+  // Animals that suit a biome.
+  animalsFor(biome) {
+    switch (biome) {
+      case BIOME.PLAINS: case BIOME.MEADOW: return ['pig', 'cow', 'sheep', 'chicken', 'rabbit'];
+      case BIOME.FOREST: case BIOME.BIRCH_FOREST: case BIOME.CHERRY: return ['pig', 'chicken', 'rabbit', 'sheep'];
+      case BIOME.TAIGA: return ['fox', 'rabbit', 'sheep', 'fox'];
+      case BIOME.SNOWY: return ['fox', 'rabbit'];
+      case BIOME.PEAKS: return ['goat', 'goat', 'sheep'];
+      case BIOME.SAVANNA: return ['cow', 'sheep', 'chicken'];
+      case BIOME.JUNGLE: return ['chicken', 'pig'];
+      case BIOME.DESERT: case BIOME.BADLANDS: return ['rabbit'];
+      case BIOME.SWAMP: return ['chicken'];
+      default: return [];
+    }
+  }
+
+  groundY(c, lx, lz) {
+    for (let y = CH - 2; y > 1; y--) {
+      const id = c.blocks[(y << 8) | (lz << 4) | lx];
+      if (!id || !SOLID[id]) continue;
+      return LIQUID[id] ? -1 : y + 1;
+    }
+    return -1;
+  }
+
   spawnInitialAnimals(c) {
-    if (rand() > 0.1) return;
-    const types = ['pig', 'cow', 'sheep'];
-    const type = types[Math.floor(rand() * 3)];
+    // Settlers live in villages whose well is in this chunk.
+    for (const v of this.gen.villagesNear(c.cx, c.cz)) {
+      if ((v.cx >> 4) !== c.cx || (v.cz >> 4) !== c.cz) continue;
+      const n = 3 + Math.floor(rand() * 3);
+      for (let i = 0; i < n; i++) {
+        const x = v.cx + Math.floor((rand() - 0.5) * 10), z = v.cz + Math.floor((rand() - 0.5) * 10);
+        const m = new Mob('settler', x + 0.5, this.gen.surfaceAt(x, z) + 2, z + 0.5);
+        m.home = [v.cx, v.cz];
+        this.entities.push(m);
+      }
+    }
+    if (rand() > 0.12) return;
+    const types = this.animalsFor(this.gen.biomeAt(c.cx * 16 + 8, c.cz * 16 + 8));
+    if (!types.length) return;
+    const type = types[Math.floor(rand() * types.length)];
     const n = 2 + Math.floor(rand() * 3);
     for (let i = 0; i < n; i++) {
       const lx = Math.floor(rand() * 16), lz = Math.floor(rand() * 16);
-      for (let y = CH - 2; y > SEA; y--) {
-        const id = c.blocks[(y << 8) | (lz << 4) | lx];
-        if (!id) continue;
-        if (id === B.GRASS) this.entities.push(new Mob(type, c.cx * 16 + lx + 0.5, y + 1, c.cz * 16 + lz + 0.5));
-        break;
-      }
+      const y = this.groundY(c, lx, lz);
+      if (y > SEA) this.entities.push(new Mob(type, c.cx * 16 + lx + 0.5, y, c.cz * 16 + lz + 0.5));
     }
+  }
+
+  // Line of sight between two points (used by ranged mobs).
+  canSee(x0, y0, z0, x1, y1, z1) {
+    const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0, d = Math.hypot(dx, dy, dz);
+    const hit = raycast(this.world, x0, y0, z0, dx / d, dy / d, dz / d, d);
+    return !hit || !OPAQUE[hit.id];
   }
 
   // ---------------------------------------------------------------- frame
@@ -514,6 +554,9 @@ export class Game {
         if (jump || f > 0) p.vy = 3.2;
         else if (sneakKey) p.vy = 0;
         else p.vy = Math.max(p.vy, -2.4);
+      }
+      if (BLOCKS[w.getBlock(Math.floor(p.x), Math.floor(p.y + 0.2), Math.floor(p.z))].web || BLOCKS[w.getBlock(Math.floor(p.x), Math.floor(p.y + 1.2), Math.floor(p.z))].web) {
+        dx *= 0.15; dz *= 0.15; p.vy = Math.max(p.vy, -1.2); p.peakY = p.y;
       }
       moveEntity(w, p, dx, p.vy * dt, dz, p.sneaking ? 0 : 0.55);
       if (onLadder && (p.hitX || p.hitZ) && f > 0) p.vy = 3.2;
@@ -709,6 +752,23 @@ export class Game {
 
     // Right button: use / place / eat
     const def = held ? itemDef(held.id) : null;
+    if (def && def.bow) {
+      const hasArrow = p.mode === 'creative' || p.inv.count(I.ARROW) > 0;
+      if (this.mouse.right && hasArrow) { p.bowCharge = Math.min(1, (p.bowCharge || 0) + dt); this.mouse.rightPressed = false; return; }
+      if (p.bowCharge > 0.15) {
+        const c = p.bowCharge, [ldx, ldy, ldz] = this.lookDir(), sp = 10 + 26 * c;
+        this.entities.push(new Arrow(p.x + ldx * 0.6, p.y + p.eye - 0.1, p.z + ldz * 0.6, ldx * sp, ldy * sp, ldz * sp, p, Math.round(2 + 7 * c * c)));
+        this.audio.play('swing', { vol: 0.8, pitch: 0.7 });
+        if (p.mode === 'survival') {
+          const ai = p.inv.find(I.ARROW);
+          if (ai >= 0) { const st = p.inv.get(ai); st.count--; p.inv.set(ai, st.count > 0 ? st : null); }
+          this.damageTool(1);
+        }
+      }
+      p.bowCharge = 0;
+      this.mouse.rightPressed = false;
+      return;
+    }
     if (this.mouse.right && def && def.food && (p.hunger < 20 || p.mode === 'creative') && !(hit && BLOCKS[hit.id].interact && !p.sneaking)) {
       p.eating += dt;
       if (Math.floor(p.eating * 4) !== Math.floor((p.eating - dt) * 4)) { this.audio.play('eat'); this.swing(0.3); }
@@ -804,7 +864,7 @@ export class Game {
       return out;
     }
     if (id === B.DEAD_BUSH) return rand() < 0.6 ? [[I.STICK, 1 + Math.floor(rand() * 2)]] : [];
-    if (id === B.GRAVEL && rand() < 0.1) return [[B.GRAVEL, 1]];
+    if (id === B.GRAVEL) return rand() < 0.12 ? [[I.FLINT, 1]] : [[B.GRAVEL, 1]];
     return [[d.drop === undefined ? id : d.drop, 1]];
   }
 
@@ -910,7 +970,7 @@ export class Game {
     let meta = 0;
     if (LOG[held.id]) meta = hit.nx ? 1 : hit.nz ? 2 : 0;
     if (SHAPE[held.id] === 1) meta = hit.ny === -1 || (hit.ny === 0 && hitY - Math.floor(hitY) > 0.5) ? 1 : 0;
-    if (bd.support === 'wall') {
+    if (bd.support === 'wall' || bd.support === 'vine') {
       if (hit.ny !== 0 || !OPAQUE[w.getBlock(hit.x, hit.y, hit.z)]) return;
       meta = hit.nx === 1 ? 1 : hit.nx === -1 ? 2 : hit.nz === 1 ? 3 : 4;
     } else if (bd.support === 'lantern') {
@@ -954,6 +1014,12 @@ export class Game {
       }
       case 'lantern': return meta === 1 ? !!SOLID[w.getBlock(x, y + 1, z)] : !!SOLID[below];
       case 'crop': return below === B.FARMLAND;
+      case 'vine': {
+        if (w.getBlock(x, y + 1, z) === B.VINES) return true;
+        const off = [null, [-1, 0], [1, 0], [0, -1], [0, 1]][meta] || [0, -1];
+        const wall = w.getBlock(x + off[0], y, z + off[1]);
+        return !!OPAQUE[wall] || !!BLOCKS[wall].leaf;
+      }
       case 'mushroom': return !!OPAQUE[below];
       case 'any': return !!SOLID[below] || !!SOLID[w.getBlock(x, y + 1, z)];
       case 'torch': {
@@ -1215,7 +1281,8 @@ export class Game {
         if (!OPAQUE[w.getBlock(x, y - 1, z)] || w.getBlock(x, y, z) !== 0 || w.getBlock(x, y + 1, z) !== 0) continue;
         const L = w.getLight(x, y, z);
         if (Math.max((L >> 4) * this.daylight, L & 15) >= 7) continue;
-        this.entities.push(new Mob('ghoul', x + 0.5, y, z + 0.5));
+        const roll = rand();
+        this.entities.push(new Mob(roll < 0.5 ? 'ghoul' : roll < 0.78 ? 'spider' : 'archer', x + 0.5, y, z + 0.5));
         break;
       }
     }
@@ -1225,8 +1292,11 @@ export class Game {
       if (!w.isLoaded(x, z)) return;
       let y;
       for (y = CH - 2; y > 1 && !w.isSolid(x, y - 1, z); y--);
-      if (w.getBlock(x, y - 1, z) !== B.GRASS) return;
-      const type = ['pig', 'cow', 'sheep'][Math.floor(rand() * 3)];
+      const ground = w.getBlock(x, y - 1, z);
+      if (ground !== B.GRASS && ground !== B.SNOWY_GRASS && ground !== B.SAND && ground !== B.PODZOL && ground !== B.SNOW && ground !== B.STONE) return;
+      const types = this.animalsFor(this.gen.biomeAt(x, z));
+      if (!types.length) return;
+      const type = types[Math.floor(rand() * types.length)];
       const n = 2 + Math.floor(rand() * 3);
       for (let i = 0; i < n; i++) this.entities.push(new Mob(type, x + 0.5 + rand() - 0.5, y, z + 0.5 + rand() - 0.5));
     }

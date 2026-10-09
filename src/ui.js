@@ -192,7 +192,7 @@ export class UI {
 
     const keys = ['renderDist', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale'];
     const fmt = {
-      renderDist: (v) => `${v} chunks`, fov: (v) => `${v}°`, sensitivity: (v) => `${Math.round(v * 100)}%`,
+      renderDist: (v) => (v > 16 ? `${v} chunks (needs a fast computer)` : `${v} chunks`), fov: (v) => `${v}°`, sensitivity: (v) => `${Math.round(v * 100)}%`,
       gamma: (v) => `${Math.round(v * 100)}%`, music: (v) => `${Math.round(v * 100)}%`, sfx: (v) => `${Math.round(v * 100)}%`,
       scale: (v) => `${Math.round(v * 100)}%`,
     };

@@ -10,15 +10,17 @@ import { smooth, clamp, lerp } from './math.js';
 export const BIOME = {
   OCEAN: 0, BEACH: 1, PLAINS: 2, FOREST: 3, DESERT: 4, SNOWY: 5, PEAKS: 6, FROZEN_OCEAN: 7,
   RIVER: 8, SAVANNA: 9, BADLANDS: 10, SWAMP: 11, BIRCH_FOREST: 12, TAIGA: 13, MEADOW: 14,
-  DEEP_OCEAN: 15, STONY_SHORE: 16, CHERRY: 17,
+  DEEP_OCEAN: 15, STONY_SHORE: 16, CHERRY: 17, JUNGLE: 18,
 };
 export const BIOME_NAMES = [
   'Ocean', 'Beach', 'Plains', 'Forest', 'Desert', 'Snowy Taiga', 'Peaks', 'Frozen Ocean',
-  'River', 'Savanna', 'Badlands', 'Swamp', 'Birch Forest', 'Taiga', 'Meadow', 'Deep Ocean', 'Stony Shore', 'Cherry Grove',
+  'River', 'Savanna', 'Badlands', 'Swamp', 'Birch Forest', 'Taiga', 'Meadow', 'Deep Ocean', 'Stony Shore', 'Cherry Grove', 'Jungle',
 ];
-const GRASSY = new Set([BIOME.PLAINS, BIOME.FOREST, BIOME.BIRCH_FOREST, BIOME.MEADOW, BIOME.TAIGA, BIOME.SNOWY, BIOME.SAVANNA, BIOME.SWAMP, BIOME.CHERRY]);
+const GRASSY = new Set([BIOME.PLAINS, BIOME.FOREST, BIOME.BIRCH_FOREST, BIOME.MEADOW, BIOME.TAIGA, BIOME.SNOWY, BIOME.SAVANNA, BIOME.SWAMP, BIOME.CHERRY, BIOME.JUNGLE]);
 
 const idx = (x, y, z) => (y << 8) | (z << 4) | x;
+const BLOCKS_LEAFY = new Set([B.LEAVES, B.BIRCH_LEAVES, B.SPRUCE_LEAVES, B.ACACIA_LEAVES, B.CHERRY_LEAVES, B.JUNGLE_LEAVES]);
+const BLOCKS_WOOD = new Set([B.LOG, B.BIRCH_LOG, B.SPRUCE_LOG, B.ACACIA_LOG, B.CHERRY_LOG, B.JUNGLE_LOG, B.CACTUS, B.PUMPKIN, B.MELON]);
 
 // Terracotta strata for badlands, repeating with height.
 const BANDS = (() => {
@@ -32,6 +34,16 @@ const BANDS = (() => {
   }
   return a;
 })();
+
+// Piecewise-linear curve through [t, value] points.
+function spline(t, pts) {
+  if (t <= pts[0][0]) return pts[0][1];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [t0, v0] = pts[i], [t1, v1] = pts[i + 1];
+    if (t <= t1) return v0 + (v1 - v0) * ((t - t0) / (t1 - t0));
+  }
+  return pts[pts.length - 1][1];
+}
 
 // Shared trilinear blend so chunk generation and point queries agree exactly.
 function tri(c000, c100, c010, c110, c001, c101, c011, c111, tx, ty, tz) {
@@ -56,12 +68,15 @@ export class WorldGen {
     this.caveC = new Noise(s + 97);
     this.weird = new Noise(s + 101);
     this.rav = new Noise(s + 163);
+    this.hillsN = new Noise(s + 171);
     this.ravMask = new Noise(s + 167);
     this.river = new Noise(s + 113);
     this.dens = new Noise(s + 127);
     this.dens2 = new Noise(s + 131);
     this.patch = new Noise(s + 149);
     this.latCache = new Map();
+    this.villages = new Map();
+    this.shafts = new Map();
     this.colCache = new Map();
   }
 
@@ -70,38 +85,50 @@ export class WorldGen {
     const key = x * 1e7 + z;
     const hit = this.colCache.get(key);
     if (hit) return hit;
-    const C = this.cont.fbm2(x / 1000, z / 1000, 4);
-    const E = this.ero.fbm2(x / 520, z / 520, 3);
-    const pv = 1 - Math.abs(this.ridge.fbm2(x / 260, z / 260, 4));
-    const D = this.detail.fbm2(x / 64, z / 64, 4);
-    const T = this.temp.fbm2(x / 1300, z / 1300, 3) * 1.6 + D * 0.04;
-    const H = this.hum.fbm2(x / 1100, z / 1100, 3) * 1.6;
-    const Wd = this.weird.fbm2(x / 700, z / 700, 2) * 1.5;
-    const land = smooth((C + 0.3) / 0.26);
-    let h = lerp(SEA - 14 + (C + 0.14) * 14, SEA + 3 + (C + 0.22) * 14, land);
-    const m = smooth((0.0 - E) / 0.45) * land;
-    h += m * (12 + 46 * pv * pv);
-    h += (1 - m) * land * D * 7 + D * 2;
+    // Large-scale shaping noises, in the spirit of modern voxel terrain:
+    // continentalness (ocean vs inland), erosion (flat vs mountainous) and ridges.
+    const C = this.cont.fbm2(x / 1500, z / 1500, 5) * 1.25 + 0.12;
+    const E = this.ero.fbm2(x / 760, z / 760, 4) * 1.3;
+    const R = this.ridge.fbm2(x / 380, z / 380, 4);
+    const ridged = 1 - Math.abs(R) * 1.6;
+    const hills = this.hillsN.fbm2(x / 170, z / 170, 3);
+    const D = this.detail.fbm2(x / 48, z / 48, 3);
+    const T = this.temp.fbm2(x / 2300, z / 2300, 3) * 1.7 + D * 0.03 + 0.08;
+    const H = this.hum.fbm2(x / 2000, z / 2000, 3) * 1.7;
+    const Wd = this.weird.fbm2(x / 1100, z / 1100, 2) * 1.5;
+    // Base height from continentalness: deep ocean, ocean, coast, lowlands, inland.
+    const base = spline(C, [[-1.1, 26], [-0.55, 34], [-0.35, 46], [-0.2, 56], [-0.12, 61], [-0.05, 64], [0.1, 67], [0.35, 72], [0.7, 80], [1.2, 88]]);
+    const land = smooth((C + 0.1) / 0.25);
+    const coast = smooth((C + 0.22) / 0.14);
+    // Erosion decides how mountainous an area may be.
+    const er = spline(E, [[-1, 1], [-0.45, 0.8], [-0.2, 0.45], [0.05, 0.18], [0.35, 0.04], [0.7, 0]]);
+    const m = er * land;
+    const peak = Math.max(0, ridged);
+    let h = base;
+    h += m * (6 + 50 * Math.pow(peak, 1.8));
+    h -= m * Math.pow(1 - peak, 2) * 5;
+    h += (1 - m * 0.8) * coast * (hills * 7 + D * 1.4);
     // Badlands: raised, terraced mesas.
-    const bad = smooth((T - 0.4) / 0.15) * smooth((-0.05 - H) / 0.15) * smooth((Wd - 0.1) / 0.15) * land;
+    const bad = smooth((T - 0.42) / 0.12) * smooth((-0.08 - H) / 0.14) * smooth((Wd - 0.05) / 0.15) * land;
     if (bad > 0) {
-      const plateau = h + 16 * smooth((D + 0.15) / 0.3);
-      const t = plateau / 7, base = Math.floor(t);
-      const stepped = base * 7 + 7 * smooth((t - base - 0.7) / 0.3);
-      h = lerp(h, stepped, bad);
+      const plateau = h + 18 * smooth((hills + 0.1) / 0.35);
+      const t = plateau / 7, b0 = Math.floor(t);
+      h = lerp(h, b0 * 7 + 7 * smooth((t - b0 - 0.72) / 0.28), bad);
     }
-    // Swamps: flattened just around sea level.
-    const swamp = smooth((H - 0.38) / 0.12) * smooth((T + 0.1) / 0.12) * (1 - smooth((T - 0.42) / 0.1)) * land * (1 - m);
-    if (swamp > 0) h = lerp(h, SEA + D * 1.6 - 0.2, swamp);
-    // Rivers follow the zero line of a low-frequency noise.
-    const rn = Math.abs(this.river.fbm2(x / 430, z / 430, 2));
-    const riv = (1 - smooth(rn / 0.045)) * land * (1 - m * 0.7) * (1 - bad * 0.6);
-    const bank = (1 - smooth(rn / 0.11)) * land * (1 - m) * (1 - bad);
-    if (bank > 0) h = lerp(h, Math.min(h, SEA + 1.5), bank * 0.6);
-    if (riv > 0) h = lerp(h, Math.min(h, SEA - 3 - Math.max(0, 1 - rn / 0.045) * 2), riv);
-    h = clamp(h, 4, CH - 12);
-    const amp = 1.2 + 14 * m * (0.35 + 0.65 * pv) + bad * 5;
-    const col = { h, amp, T, H, W: Wd, m, C, land, riv, bad, swamp, D };
+    // Swamps: flattened right at sea level.
+    const swamp = smooth((H - 0.32) / 0.12) * smooth((T + 0.05) / 0.12) * (1 - smooth((T - 0.32) / 0.08)) * land * (1 - m * 1.5);
+    if (swamp > 0) h = lerp(h, SEA + D * 1.4 - 0.3, Math.min(1, swamp));
+    // Rivers: wide, shallow channels with sloping banks, fading out in mountains.
+    const rn = Math.abs(this.river.fbm2(x / 520, z / 520, 3));
+    const fade = (1 - smooth((m - 0.35) / 0.4)) * coast * (1 - bad * 0.7);
+    const riv = (1 - smooth(rn / 0.05)) * fade;
+    const bank = (1 - smooth(rn / 0.13)) * fade;
+    if (bank > 0) h = lerp(h, Math.min(h, SEA + 1 + rn * 20), bank * 0.75);
+    if (riv > 0) h = lerp(h, Math.min(h, SEA - 2.5 - Math.max(0, 1 - rn / 0.05) * 2.5), riv);
+    h = clamp(h, 4, CH - 10);
+    // Cliffs and overhangs only where mountains rise; elsewhere the surface stays clean.
+    const amp = 0.6 + m * peak * 8 + bad * 3;
+    const col = { h, amp, T, H, W: Wd, m, C, land: coast, riv, bad, swamp, D };
     if (this.colCache.size > 60000) this.colCache.clear();
     this.colCache.set(key, col);
     return col;
@@ -154,17 +181,18 @@ export class WorldGen {
     if (surf < SEA - 1) {
       if (col.riv > 0.45) return BIOME.RIVER;
       if (col.C < -0.55) return BIOME.DEEP_OCEAN;
-      return T < -0.45 ? BIOME.FROZEN_OCEAN : BIOME.OCEAN;
+      return T < -0.6 ? BIOME.FROZEN_OCEAN : BIOME.OCEAN;
     }
     if (col.riv > 0.6) return BIOME.RIVER;
     if (surf <= SEA + 2 && col.land < 0.97 && col.swamp < 0.5) {
-      if (T < -0.45) return BIOME.SNOWY;
+      if (T < -0.6) return BIOME.SNOWY;
       return steep ? BIOME.STONY_SHORE : BIOME.BEACH;
     }
-    if (surf > 97 || (col.m > 0.55 && surf > 88)) return BIOME.PEAKS;
-    if (T < -0.45) return BIOME.SNOWY;
-    if (T < -0.15) return BIOME.TAIGA;
+    if (surf > 100 || (col.m > 0.6 && surf > 92)) return BIOME.PEAKS;
+    if (T < -0.6) return BIOME.SNOWY;
+    if (T < -0.3) return BIOME.TAIGA;
     if (col.bad > 0.5) return BIOME.BADLANDS;
+    if (T > 0.28 && H > 0.3) return BIOME.JUNGLE;
     if (T > 0.45 && H < -0.05) return BIOME.DESERT;
     if (T > 0.25 && H < 0.12) return BIOME.SAVANNA;
     if (col.swamp > 0.5) return BIOME.SWAMP;
@@ -267,12 +295,14 @@ export class WorldGen {
     this.carveCaves(chunk, surf);
     this.placeOres(chunk, biomes);
     this.decorate(chunk, surf, biomes);
+    this.paintMineshafts(chunk);
+    for (const v of this.villagesNear(chunk.cx, chunk.cz)) this.paintVillage(chunk, v);
   }
 
   // Replaces stone near the surface with biome materials, adds water and ice.
   paintColumn(bl, x, z, wx, wz, col, biome, steep, top) {
     const r = hash2(wx, wz, this.seed);
-    const cold = col.T < -0.45;
+    const cold = col.T < -0.6;
     let topB = B.GRASS, filler = B.DIRT, depth = 3 + (r < 0.5 ? 1 : 0), under = 0, underDepth = 0;
     switch (biome) {
       case BIOME.OCEAN: case BIOME.DEEP_OCEAN: case BIOME.FROZEN_OCEAN: {
@@ -443,7 +473,7 @@ export class WorldGen {
   // ---------------------------------------------------------------- features
   treeAt(wx, wz) {
     const r = hash2(wx, wz, this.seed ^ 0x5eed);
-    if (r > 0.07) return null;
+    if (r > 0.11) return null;
     const col = this.column(wx, wz);
     if (col.riv > 0.3) return null;
     const h = this.surfaceAt(wx, wz, col);
@@ -454,7 +484,7 @@ export class WorldGen {
     if (!GRASSY.has(biome) && !(biome === BIOME.PEAKS && h < 92)) return null;
     const density = {
       [BIOME.FOREST]: 0.06, [BIOME.BIRCH_FOREST]: 0.06, [BIOME.PLAINS]: 0.006, [BIOME.MEADOW]: 0.003,
-      [BIOME.TAIGA]: 0.05, [BIOME.SNOWY]: 0.016, [BIOME.SAVANNA]: 0.012, [BIOME.SWAMP]: 0.022, [BIOME.PEAKS]: 0.004, [BIOME.CHERRY]: 0.03,
+      [BIOME.TAIGA]: 0.05, [BIOME.SNOWY]: 0.016, [BIOME.SAVANNA]: 0.012, [BIOME.SWAMP]: 0.022, [BIOME.PEAKS]: 0.004, [BIOME.CHERRY]: 0.03, [BIOME.JUNGLE]: 0.075,
     }[biome] || 0;
     if (r >= density) return null;
     if (this.isCave(wx, h, wz) || this.isCave(wx, h - 1, wz)) return null;
@@ -470,6 +500,7 @@ export class WorldGen {
       case BIOME.SAVANNA: type = r2 < 0.75 ? 'acacia' : 'bush'; break;
       case BIOME.SWAMP: type = 'swamp'; break;
       case BIOME.CHERRY: type = r2 < 0.85 ? 'cherry' : 'bush'; break;
+      case BIOME.JUNGLE: type = r2 < 0.12 ? 'megajungle' : r2 < 0.55 ? 'jungle' : 'junglebush'; break;
     }
     return { h, type, r2, biome };
   }
@@ -483,7 +514,7 @@ export class WorldGen {
       bl[i] = id;
       me[i] = meta;
     };
-    for (let lz = -6; lz <= 21; lz++) for (let lx = -6; lx <= 21; lx++) {
+    for (let lz = -8; lz <= 23; lz++) for (let lx = -8; lx <= 23; lx++) {
       const t = this.treeAt(cx + lx, cz + lz);
       if (!t) continue;
       placeTree(set, lx, t.h + 1, lz, t.type, t.r2);
@@ -521,6 +552,7 @@ export class WorldGen {
     this.geode(chunk, rnd);
     this.ruins(chunk, surf, biomes, rnd, set);
     this.crypt(chunk, rnd, set);
+    this.smallStructures(chunk, surf, biomes, rnd, set);
     // Ground cover.
     for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) {
       const wx = cx + x, wz = cz + z, h = surf[z * 16 + x];
@@ -539,13 +571,14 @@ export class WorldGen {
         if (biome === BIOME.SWAMP) { grass = 0.16; flower = 0.003; }
         if (biome === BIOME.TAIGA) { grass = 0.06; flower = 0.002; }
         if (biome === BIOME.CHERRY) { grass = 0.2; flower = 0.07; }
-        if ((biome === BIOME.SWAMP || biome === BIOME.FOREST) && this.patch.noise2(wx / 7, wz / 7) > 0.62) { bl[idx(x, h, z)] = B.MOSS_BLOCK; continue; }
+        if (biome === BIOME.SWAMP && this.patch.noise2(wx / 7, wz / 7) > 0.72) { bl[idx(x, h, z)] = B.MOSS_BLOCK; continue; }
+        if (biome === BIOME.JUNGLE) { grass = 0.32; flower = 0.004; }
         if (r < flower) {
           const k = Math.floor(hash2(wx, wz, 7) * 4);
           bl[ai] = [B.POPPY, B.BUTTERCUP, B.CORNFLOWER, B.DAISY][(k + (flowers > 0.2 ? 2 : 0)) % 4];
         } else if (r < flower + grass) bl[ai] = biome === BIOME.TAIGA || (biome === BIOME.SWAMP && r > flower + grass * 0.6) ? B.FERN : B.TALL_GRASS;
         else if (r > 0.9985 && (biome === BIOME.PLAINS || biome === BIOME.FOREST || biome === BIOME.SAVANNA)) { bl[ai] = B.PUMPKIN; me[ai] = [0, 1, 4, 5][Math.floor(hash2(wx, wz, 3) * 4)]; }
-        else if (r > 0.9975 && r <= 0.9985 && (biome === BIOME.SAVANNA || biome === BIOME.SWAMP || biome === BIOME.PLAINS)) bl[ai] = B.MELON;
+        else if (r > 0.9975 && r <= 0.9985 && (biome === BIOME.SAVANNA || biome === BIOME.SWAMP || biome === BIOME.PLAINS || biome === BIOME.JUNGLE)) bl[ai] = B.MELON;
       } else if (top === B.SAND || top === B.RED_SAND || (top >= B.TERRACOTTA && top <= B.TERRACOTTA_RED && biome === BIOME.BADLANDS)) {
         if (biome === BIOME.DESERT && r < 0.006) {
           const ch = 1 + Math.floor(hash2(wx, wz, 99) * 3);
@@ -572,7 +605,7 @@ export class WorldGen {
     const level = surf[cz0 * 16 + cx0], b = biomes[cz0 * 16 + cx0];
     const dry = b === BIOME.DESERT || b === BIOME.BADLANDS || b === BIOME.SAVANNA;
     if (!GRASSY.has(b) && !dry) return;
-    if (dry && rnd() > 0.35) return;
+    if (dry && rnd() > 0.12) return;
     if (level <= SEA || level > 110) return;
     const R = Math.ceil(r) + 1;
     for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
@@ -663,6 +696,320 @@ export class WorldGen {
     if (rnd() < 0.6) set(x0 + 6, y0 + 1, z0 + 6, B.CHEST, false, 1);
     set(x0 + 4, y0 + 4, z0 + 4, B.LANTERN, false, 1);
     for (let k = 0; k < 4; k++) if (rnd() < 0.5) set(x0 + 1 + Math.floor(rnd() * 6), y0 + 1, z0 + 1 + Math.floor(rnd() * 6), B.BROWN_MUSHROOM, true);
+  }
+
+  // ---------------------------------------------------------------- villages
+  // Each 288-block region may hold one village. The layout is a pure function of
+  // the region, so every chunk paints its own slice of the same village.
+  villageAt(rx, rz) {
+    const key = rx * 100000 + rz;
+    if (this.villages.has(key)) return this.villages.get(key);
+    let v = null;
+    const RS = 288;
+    if (hash2(rx, rz, this.seed ^ 0x7111) < 0.5) {
+      const cx = rx * RS + 56 + Math.floor(hash2(rx, rz, this.seed ^ 1) * 176);
+      const cz = rz * RS + 56 + Math.floor(hash2(rx, rz, this.seed ^ 2) * 176);
+      const col = this.column(cx, cz), y = this.surfaceAt(cx, cz, col);
+      const biome = this.biomeOf(col, y, this.steep(cx, cz, col));
+      const styles = { [BIOME.PLAINS]: 'oak', [BIOME.MEADOW]: 'oak', [BIOME.SAVANNA]: 'acacia', [BIOME.DESERT]: 'desert', [BIOME.TAIGA]: 'spruce', [BIOME.SNOWY]: 'spruce', [BIOME.FOREST]: 'oak' };
+      if (styles[biome] && y > SEA + 1 && col.m < 0.3 && col.riv < 0.2) v = this.layoutVillage(rx, rz, cx, cz, styles[biome]);
+    }
+    if (this.villages.size > 400) this.villages.clear();
+    this.villages.set(key, v);
+    return v;
+  }
+
+  layoutVillage(rx, rz, cx, cz, style) {
+    const rng = mulberry32((Math.imul(rx, 9137) ^ Math.imul(rz, 5503) ^ this.seed ^ 0xa11) | 0);
+    const pieces = [], roads = [];
+    const box = (x0, z0, w, d) => ({ x0, z0, x1: x0 + w - 1, z1: z0 + d - 1 });
+    const free = (b) => pieces.every((p) => b.x1 + 1 < p.x0 || b.x0 - 1 > p.x1 || b.z1 + 1 < p.z0 || b.z0 - 1 > p.z1)
+      && roads.every((r) => b.x1 < r.x0 || b.x0 > r.x1 || b.z1 < r.z0 || b.z0 > r.z1);
+    const add = (type, x0, z0, w, d, rot, extra = {}) => {
+      const fw = rot % 2 ? d : w, fd = rot % 2 ? w : d;
+      const b = box(x0, z0, fw, fd);
+      if (!free(b)) return false;
+      const y = this.surfaceAt(x0 + (fw >> 1), z0 + (fd >> 1));
+      if (y <= SEA) return false;
+      pieces.push({ type, rot, w, d, y, ...b, ...extra });
+      return true;
+    };
+    add('well', cx - 2, cz - 2, 5, 5, 0);
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (const [dx, dz] of dirs) {
+      if (rng() > 0.85) continue;
+      const len = 16 + Math.floor(rng() * 22);
+      const sx = cx + dx * 3, sz = cz + dz * 3, ex = cx + dx * (3 + len), ez = cz + dz * (3 + len);
+      roads.push({ x0: Math.min(sx, ex) - (dz ? 1 : 0), x1: Math.max(sx, ex) + (dz ? 1 : 0), z0: Math.min(sz, ez) - (dx ? 1 : 0), z1: Math.max(sz, ez) + (dx ? 1 : 0) });
+      for (let t = 6; t < len - 2; t += 8 + Math.floor(rng() * 4)) {
+        const px = cx + dx * (3 + t), pz = cz + dz * (3 + t);
+        for (const side of [-1, 1]) {
+          if (rng() < 0.25) continue;
+          const roll = rng();
+          const [type, w, d] = roll < 0.45 ? ['house', 5, 5] : roll < 0.65 ? ['bighouse', 7, 7] : roll < 0.88 ? ['farm', 7, 9] : ['lamp', 1, 1];
+          // Front of each piece faces the road.
+          let x0, z0, rot;
+          if (dx) {
+            rot = side < 0 ? 2 : 0;
+            const fw = w, fd = d;
+            x0 = px - (fw >> 1);
+            z0 = side < 0 ? cz - 2 - fd : cz + 2;
+          } else {
+            rot = side < 0 ? 1 : 3;
+            const fw = d, fd = w;
+            z0 = pz - (fd >> 1);
+            x0 = side < 0 ? cx - 2 - fw : cx + 2;
+          }
+          add(type, x0, z0, w, d, rot);
+        }
+        if (rng() < 0.5) add('lamp', px + (dz ? 2 : 0), pz + (dx ? 2 : 0), 1, 1, 0);
+      }
+    }
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (const p of [...pieces, ...roads]) { x0 = Math.min(x0, p.x0); z0 = Math.min(z0, p.z0); x1 = Math.max(x1, p.x1); z1 = Math.max(z1, p.z1); }
+    return { cx, cz, style, pieces, roads, x0: x0 - 2, z0: z0 - 2, x1: x1 + 2, z1: z1 + 2 };
+  }
+
+  villagesNear(cx, cz) {
+    const out = [], RS = 288;
+    const x0 = cx * 16, z0 = cz * 16;
+    for (let rx = Math.floor((x0 - 80) / RS); rx <= Math.floor((x0 + 95) / RS); rx++)
+      for (let rz = Math.floor((z0 - 80) / RS); rz <= Math.floor((z0 + 95) / RS); rz++) {
+        const v = this.villageAt(rx, rz);
+        if (v && v.x1 >= x0 && v.x0 <= x0 + 15 && v.z1 >= z0 && v.z0 <= z0 + 15) out.push(v);
+      }
+    return out;
+  }
+
+  paintVillage(chunk, v) {
+    const bl = chunk.blocks, me = chunk.meta, X0 = chunk.cx * 16, Z0 = chunk.cz * 16;
+    const inChunk = (x, z) => x >= X0 && x < X0 + 16 && z >= Z0 && z < Z0 + 16;
+    const get = (x, y, z) => bl[idx(x - X0, y, z - Z0)];
+    const put = (x, y, z, id, meta = 0) => { if (!inChunk(x, z) || y < 1 || y >= CH) return; const i = idx(x - X0, y, z - Z0); bl[i] = id; me[i] = meta; };
+    const soft = (id) => id === 0 || id === B.WATER || id === B.TALL_GRASS || id === B.FERN || id === B.SNOW || BLOCKS_LEAFY.has(id) || (id >= B.POPPY && id <= B.SPRUCE_SAPLING) || id === B.DAISY || id === B.CORNFLOWER || id === B.VINES;
+    const S = {
+      oak: { wall: B.PLANKS, post: B.LOG, floor: B.COBBLESTONE, roof: B.SPRUCE_PLANKS, slab: B.SPRUCE_SLAB, path: B.PATH },
+      spruce: { wall: B.SPRUCE_PLANKS, post: B.SPRUCE_LOG, floor: B.COBBLESTONE, roof: B.SPRUCE_PLANKS, slab: B.SPRUCE_SLAB, path: B.PATH },
+      acacia: { wall: B.ACACIA_PLANKS, post: B.ACACIA_LOG, floor: B.TERRACOTTA, roof: B.ACACIA_PLANKS, slab: B.OAK_SLAB, path: B.PATH },
+      desert: { wall: B.SANDSTONE, post: B.SMOOTH_STONE, floor: B.SANDSTONE, roof: B.SANDSTONE, slab: B.SANDSTONE_SLAB, path: B.SMOOTH_STONE },
+    }[v.style];
+    // Roads follow the terrain; bridges cross water.
+    for (const r of v.roads) {
+      for (let x = Math.max(r.x0, X0); x <= Math.min(r.x1, X0 + 15); x++) for (let z = Math.max(r.z0, Z0); z <= Math.min(r.z1, Z0 + 15); z++) {
+        const y = this.surfaceAt(x, z);
+        if (y < SEA) { put(x, SEA, z, S.wall); continue; }
+        put(x, y, z, S.path);
+        for (let k = 1; k <= 5; k++) if (soft(get(x, y + k, z)) || BLOCKS_WOOD.has(get(x, y + k, z))) put(x, y + k, z, 0);
+      }
+    }
+    for (const p of v.pieces) {
+      if (p.x1 < X0 || p.x0 > X0 + 15 || p.z1 < Z0 || p.z0 > Z0 + 15) continue;
+      const fw = p.rot % 2 ? p.d : p.w;
+      // local (lx, ly, lz) -> world; lz = 0 is the front (door side).
+      const T = (lx, lz) => {
+        switch (p.rot) {
+          case 0: return [p.x0 + lx, p.z0 + lz];
+          case 1: return [p.x0 + (p.d - 1 - lz), p.z0 + lx];
+          case 2: return [p.x0 + (p.w - 1 - lx), p.z0 + (p.d - 1 - lz)];
+          default: return [p.x0 + lz, p.z0 + (p.w - 1 - lx)];
+        }
+      };
+      const at = (lx, ly, lz, id, meta = 0) => { const [x, z] = T(lx, lz); put(x, p.y + ly, z, id, meta); };
+      const foundation = () => {
+        for (let lz = 0; lz < p.d; lz++) for (let lx = 0; lx < p.w; lx++) {
+          const [x, z] = T(lx, lz);
+          if (!inChunk(x, z)) continue;
+          for (let y = p.y; y > p.y - 9 && y > 0; y--) { if (y < p.y && !soft(get(x, y, z))) break; put(x, y, z, y === p.y ? S.floor : B.COBBLESTONE); }
+          for (let k = 1; k <= 9; k++) put(x, p.y + k, z, 0);
+        }
+      };
+      const front = [5, 0, 4, 1][p.rot];
+      if (p.type === 'house' || p.type === 'bighouse') {
+        const big = p.type === 'bighouse', W = p.w, D = p.d, H = big ? 4 : 3;
+        foundation();
+        for (let lz = 0; lz < D; lz++) for (let lx = 0; lx < W; lx++) {
+          const edge = lx === 0 || lz === 0 || lx === W - 1 || lz === D - 1;
+          if (!edge) { at(lx, 0, lz, big ? S.wall : S.floor); continue; }
+          const corner = (lx === 0 || lx === W - 1) && (lz === 0 || lz === D - 1);
+          for (let ly = 1; ly <= H; ly++) {
+            const door = lz === 0 && lx === (W >> 1) && ly <= 2;
+            const window = !corner && ly === 2 && (lx === 1 || lx === W - 2 || lz === D >> 1) && !(lz === 0 && Math.abs(lx - (W >> 1)) < 1);
+            if (door) continue;
+            at(lx, ly, lz, corner ? S.post : window ? B.GLASS : S.wall, corner ? 0 : 0);
+          }
+        }
+        // Stepped roof.
+        for (let layer = 0; layer <= (W >> 1); layer++) for (let lz = layer - 1; lz <= D - layer; lz++) for (let lx = layer - 1; lx <= W - layer; lx++) {
+          const ring = lx === layer - 1 || lz === layer - 1 || lx === W - layer || lz === D - layer;
+          if (!ring && layer < (W >> 1)) continue;
+          at(lx, H + 1 + layer, lz, ring ? S.slab : S.roof, 0);
+        }
+        at(1, 1, D - 2, B.BEDROLL, front);
+        at(W - 2, 1, D - 2, (p.x0 + p.z0) % 3 ? B.CRAFTING_TABLE : B.CHEST, front);
+        at(W >> 1, H, D >> 1, B.LANTERN, 1);
+        if (big) { at(1, 1, 1, B.FURNACE, front); at(W - 2, 1, 1, B.BOOKSHELF, 0); }
+        for (let k = 1; k <= 2; k++) { const [x, z] = T(W >> 1, -k); const y = this.surfaceAt(x, z); if (inChunk(x, z) && Math.abs(y - p.y) <= 2) put(x, y, z, S.path); }
+      } else if (p.type === 'farm') {
+        foundation();
+        for (let lz = 0; lz < p.d; lz++) for (let lx = 0; lx < p.w; lx++) {
+          const edge = lx === 0 || lz === 0 || lx === p.w - 1 || lz === p.d - 1;
+          if (edge) { at(lx, 0, lz, S.post, (lx === 0 || lx === p.w - 1) ? 2 : 1); continue; }
+          if (lx === p.w >> 1) { at(lx, 0, lz, B.WATER); continue; }
+          at(lx, 0, lz, B.FARMLAND);
+          at(lx, 1, lz, B.WHEAT, 3 + Math.floor(hash2(p.x0 + lx, p.z0 + lz, 4) * 5));
+        }
+      } else if (p.type === 'well') {
+        foundation();
+        for (let lz = 0; lz < 5; lz++) for (let lx = 0; lx < 5; lx++) {
+          const inner = lx >= 1 && lx <= 3 && lz >= 1 && lz <= 3, core = lx === 2 && lz === 2;
+          if (core) { for (let k = -4; k <= 0; k++) at(lx, k, lz, B.WATER); continue; }
+          at(lx, 0, lz, B.COBBLESTONE);
+          if (inner) at(lx, 1, lz, B.COBBLESTONE);
+          if ((lx === 1 || lx === 3) && (lz === 1 || lz === 3)) { at(lx, 2, lz, B.FENCE_POST); at(lx, 3, lz, B.FENCE_POST); }
+          if (inner) at(lx, 4, lz, S.slab, 0);
+        }
+        at(2, 3, 2, B.LANTERN, 1);
+      } else if (p.type === 'lamp') {
+        const [x, z] = T(0, 0);
+        if (!inChunk(x, z)) continue;
+        const y = this.surfaceAt(x, z);
+        put(x, y, z, B.COBBLESTONE);
+        for (let k = 1; k <= 3; k++) put(x, y + k, z, B.FENCE_POST);
+        put(x, y + 4, z, B.LANTERN, 0);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- mineshafts
+  mineshaftAt(rx, rz) {
+    const key = rx * 100000 + rz;
+    if (this.shafts.has(key)) return this.shafts.get(key);
+    let m = null;
+    const RS = 224;
+    if (hash2(rx, rz, this.seed ^ 0x3a17) < 0.4) {
+      const rng = mulberry32((Math.imul(rx, 7349) ^ Math.imul(rz, 3911) ^ this.seed ^ 0x5af7) | 0);
+      const cx = rx * RS + 40 + Math.floor(rng() * 144), cz = rz * RS + 40 + Math.floor(rng() * 144), y = 16 + Math.floor(rng() * 20);
+      const cors = [];
+      const q = [[cx, cz, 0, 0], [cx, cz, 1, 0], [cx, cz, 2, 0], [cx, cz, 3, 0]];
+      const D = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+      while (q.length && cors.length < 28) {
+        const [sx, sz, dir, depth] = q.shift();
+        if (rng() < 0.15 && depth > 0) continue;
+        const len = 10 + Math.floor(rng() * 22), [dx, dz] = D[dir];
+        const ex = sx + dx * len, ez = sz + dz * len;
+        if (Math.abs(ex - cx) > 96 || Math.abs(ez - cz) > 96) continue;
+        const cy = y + (depth % 2 && rng() < 0.4 ? (rng() < 0.5 ? -3 : 3) : 0);
+        cors.push({ x0: Math.min(sx, ex) - (dz ? 1 : 0), x1: Math.max(sx, ex) + (dz ? 1 : 0), z0: Math.min(sz, ez) - (dx ? 1 : 0), z1: Math.max(sz, ez) + (dx ? 1 : 0), y: cy, alongX: !!dx });
+        if (depth < 4) for (const nd of [dir, (dir + 1) % 4, (dir + 3) % 4]) if (rng() < (nd === dir ? 0.5 : 0.55)) q.push([ex, ez, nd, depth + 1]);
+      }
+      let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+      for (const c of cors) { x0 = Math.min(x0, c.x0); z0 = Math.min(z0, c.z0); x1 = Math.max(x1, c.x1); z1 = Math.max(z1, c.z1); }
+      m = { cors, x0, z0, x1, z1 };
+    }
+    if (this.shafts.size > 400) this.shafts.clear();
+    this.shafts.set(key, m);
+    return m;
+  }
+
+  paintMineshafts(chunk) {
+    const bl = chunk.blocks, me = chunk.meta, X0 = chunk.cx * 16, Z0 = chunk.cz * 16, RS = 224;
+    for (let rx = Math.floor((X0 - 110) / RS); rx <= Math.floor((X0 + 125) / RS); rx++)
+      for (let rz = Math.floor((Z0 - 110) / RS); rz <= Math.floor((Z0 + 125) / RS); rz++) {
+        const m = this.mineshaftAt(rx, rz);
+        if (!m || m.x1 < X0 || m.x0 > X0 + 15 || m.z1 < Z0 || m.z0 > Z0 + 15) continue;
+        for (const c of m.cors) {
+          if (c.x1 < X0 || c.x0 > X0 + 15 || c.z1 < Z0 || c.z0 > Z0 + 15) continue;
+          for (let x = Math.max(c.x0, X0); x <= Math.min(c.x1, X0 + 15); x++) for (let z = Math.max(c.z0, Z0); z <= Math.min(c.z1, Z0 + 15); z++) {
+            const lx = x - X0, lz = z - Z0;
+            const along = c.alongX ? x : z;
+            const side = c.alongX ? (z === c.z0 ? -1 : z === c.z1 ? 1 : 0) : (x === c.x0 ? -1 : x === c.x1 ? 1 : 0);
+            if (bl[idx(lx, c.y + 3, lz)] === B.WATER) continue;
+            let wet = false;
+            for (let y = c.y; y <= c.y + 2; y++) { const id = bl[idx(lx, y, lz)]; if (id === B.WATER || id === B.LAVA) wet = true; }
+            if (wet) continue;
+            const support = ((along % 5) + 5) % 5 === 0;
+            for (let y = c.y; y <= c.y + 2; y++) {
+              const i = idx(lx, y, lz);
+              if (bl[i] === B.BEDROCK) continue;
+              let id = 0;
+              if (support && side !== 0 && y < c.y + 2) id = B.FENCE_POST;
+              else if (support && y === c.y + 2) id = B.PLANKS;
+              else if (!support && side !== 0 && y === c.y + 2 && hash3(x, y, z, this.seed ^ 0xc0b) < 0.12) id = B.COBWEB;
+              bl[i] = id; me[i] = 0;
+            }
+            const fi = idx(lx, c.y - 1, lz);
+            if (bl[fi] === 0 || bl[fi] === B.LAVA || bl[fi] === B.WATER) bl[fi] = B.PLANKS;
+            if (side !== 0 && !support && hash3(x, c.y, z, this.seed ^ 0xc4e) < 0.006) { bl[idx(lx, c.y, lz)] = B.CHEST; me[idx(lx, c.y, lz)] = 0; }
+            else if (side === 0 && support && hash3(x, c.y, z, this.seed ^ 0x1a7) < 0.35) { bl[idx(lx, c.y + 1, lz)] = B.LANTERN; me[idx(lx, c.y + 1, lz)] = 1; }
+          }
+        }
+      }
+  }
+
+  // ---------------------------------------------------------------- small builds (inside one chunk)
+  smallStructures(chunk, surf, biomes, rnd, set) {
+    const bl = chunk.blocks;
+    const flat = (x0, z0, w, d) => {
+      let lo = 999, hi = 0;
+      for (let z = z0; z < z0 + d; z++) for (let x = x0; x < x0 + w; x++) { const s = surf[z * 16 + x]; lo = Math.min(lo, s); hi = Math.max(hi, s); }
+      return hi - lo <= 1 && lo > SEA ? hi : -1;
+    };
+    const roll = rnd();
+    const x0 = 4 + Math.floor(rnd() * 4), z0 = 4 + Math.floor(rnd() * 4);
+    const b = biomes[(z0 + 3) * 16 + x0 + 3];
+    if (b === BIOME.DESERT && roll < 0.012) {
+      const y = flat(x0, z0, 4, 4);
+      if (y < 0) return;
+      for (let z = 0; z < 4; z++) for (let x = 0; x < 4; x++) {
+        const inner = x > 0 && x < 3 && z > 0 && z < 3;
+        set(x0 + x, y, z0 + z, inner ? B.WATER : B.SANDSTONE, false);
+        if (inner) for (let k = 1; k < 4; k++) set(x0 + x, y - k, z0 + z, B.WATER, false);
+        else { set(x0 + x, y + 1, z0 + z, B.SANDSTONE_SLAB, false); }
+        if ((x === 0 || x === 3) && (z === 0 || z === 3)) { set(x0 + x, y + 2, z0 + z, B.SANDSTONE, false); set(x0 + x, y + 3, z0 + z, B.SANDSTONE, false); }
+        set(x0 + x, y + 4, z0 + z, B.SANDSTONE_SLAB, false);
+      }
+    } else if (b === BIOME.SNOWY && roll < 0.02) {
+      const y = flat(x0, z0, 7, 7);
+      if (y < 0) return;
+      for (let dy = 0; dy <= 4; dy++) for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) {
+        const d = Math.hypot(dx, dy * 1.25, dz);
+        const x = x0 + 3 + dx, z = z0 + 3 + dz;
+        if (d < 3.4 && d >= 2.4) set(x, y + 1 + dy, z, dy === 1 && dx === 3 && dz === 0 ? B.ICE : B.SNOW, false);
+        else if (d < 2.4) set(x, y + 1 + dy, z, 0, false);
+      }
+      set(x0 + 3, y + 1, z0, 0, false); set(x0 + 3, y + 2, z0, 0, false);
+      set(x0 + 3, y + 1, z0 + 5, B.CHEST, false, 5); set(x0 + 2, y + 1, z0 + 4, B.BEDROLL, false, 4); set(x0 + 4, y + 1, z0 + 4, B.TORCH, false, 0);
+    } else if (b === BIOME.SWAMP && roll < 0.04) {
+      const y = SEA + 3;
+      for (let z = 0; z < 5; z++) for (let x = 0; x < 5; x++) {
+        if ((x === 0 || x === 4) && (z === 0 || z === 4)) for (let k = y; k > SEA - 3; k--) if (bl[idx(x0 + x, k, z0 + z)] === 0 || bl[idx(x0 + x, k, z0 + z)] === B.WATER || k >= y) set(x0 + x, k, z0 + z, B.SPRUCE_LOG, false);
+        set(x0 + x, y, z0 + z, B.SPRUCE_PLANKS, false);
+        const edge = x === 0 || z === 0 || x === 4 || z === 4;
+        for (let k = 1; k <= 3; k++) set(x0 + x, y + k, z0 + z, edge ? (k === 2 && (x === 2 || z === 2) ? B.GLASS : B.SPRUCE_PLANKS) : 0, false);
+        set(x0 + x, y + 4, z0 + z, B.SPRUCE_SLAB, false);
+      }
+      set(x0 + 2, y + 1, z0, 0, false); set(x0 + 2, y + 2, z0, 0, false);
+      set(x0 + 2, y + 1, z0 + 3, B.CHEST, false, 5); set(x0 + 1, y + 3, z0 + 2, B.LANTERN, false, 1);
+      for (let k = 1; k <= 3; k++) set(x0 + 2, y - k + 1, z0 - 1, B.LADDER, false, 4);
+    } else if ((b === BIOME.PLAINS || b === BIOME.FOREST || b === BIOME.TAIGA || b === BIOME.MEADOW) && roll < 0.01) {
+      const y = flat(x0, z0, 3, 3);
+      if (y < 0) return;
+      const H = 9;
+      for (let k = 0; k <= H; k++) for (let z = 0; z < 3; z++) for (let x = 0; x < 3; x++) {
+        const corner = (x === 0 || x === 2) && (z === 0 || z === 2);
+        if (corner) set(x0 + x, y + k, z0 + z, B.LOG, false);
+        else if (x === 1 && z === 1) set(x0 + x, y + k, z0 + z, k === 0 ? B.COBBLESTONE : 0, false);
+        else set(x0 + x, y + k, z0 + z, k === 0 || k === H ? B.PLANKS : k % 3 === 2 && x === 1 && z === 0 ? 0 : 0, false);
+      }
+      for (let k = 1; k <= H; k++) set(x0 + 1, y + k, z0 + 1, B.LADDER, false, 4);
+      set(x0 + 1, y + H, z0 + 1, 0, false);
+      for (let z = -1; z <= 3; z++) for (let x = -1; x <= 3; x++) {
+        set(x0 + x, y + H, z0 + z, x === 1 && z === 1 ? 0 : B.PLANKS, false);
+        if (x === -1 || z === -1 || x === 3 || z === 3) set(x0 + x, y + H + 1, z0 + z, B.FENCE_POST, false);
+      }
+      set(x0 + 3, y + H + 2, z0 + 3, B.LANTERN, false, 0);
+      set(x0 + 2, y + H + 1, z0 + 2, B.CHEST, false, 4);
+    }
   }
 
   findSpawn() {
@@ -787,6 +1134,40 @@ export function placeTree(set, x, y, z, type, r) {
         const a = rng() * Math.PI * 2;
         set(tx + Math.round(Math.cos(a) * 3), top - 2, tz + Math.round(Math.sin(a) * 3), B.CHERRY_LEAVES, true);
       }
+      return;
+    }
+    case 'jungle': case 'megajungle': {
+      const mega = type === 'megajungle';
+      const h = mega ? 16 + Math.floor(rng() * 8) : 8 + Math.floor(rng() * 5);
+      const w = mega ? 2 : 1;
+      for (let k = 0; k < h; k++) for (let dz = 0; dz < w; dz++) for (let dx = 0; dx < w; dx++) set(x + dx, y + k, z + dz, B.JUNGLE_LOG, false);
+      const cx0 = x + (w - 1) / 2, cz0 = z + (w - 1) / 2;
+      blob(Math.round(cx0), y + h, Math.round(cz0), mega ? 4.2 : 2.6, B.JUNGLE_LEAVES, 2.2);
+      if (mega) for (let b = 0; b < 3; b++) {
+        const a = rng() * 6.283, by = y + Math.floor(h * (0.55 + rng() * 0.25));
+        const ex = Math.round(cx0 + Math.cos(a) * 4), ez = Math.round(cz0 + Math.sin(a) * 4);
+        for (let k = 1; k <= 3; k++) set(Math.round(cx0 + Math.cos(a) * k), by + Math.floor(k / 2), Math.round(cz0 + Math.sin(a) * k), B.JUNGLE_LOG, false, Math.abs(Math.cos(a)) > 0.7 ? 1 : 2);
+        blob(ex, by + 2, ez, 2.4, B.JUNGLE_LEAVES, 2);
+      }
+      // Vines hang from the trunk sides and the canopy edge.
+      const vine = (vx, vy, vz, meta, len) => { for (let k = 0; k < len; k++) set(vx, vy - k, vz, B.VINES, true, meta); };
+      for (let k = 2; k < h - 1; k++) {
+        if (rng() < 0.35) vine(x - 1, y + k, z, 2, 1);
+        if (rng() < 0.35) vine(x + w, y + k, z, 1, 1);
+        if (rng() < 0.3) vine(x, y + k, z - 1, 4, 1);
+        if (rng() < 0.3) vine(x, y + k, z + w, 3, 1);
+      }
+      const R = mega ? 5 : 3;
+      for (let i = 0; i < (mega ? 14 : 6); i++) {
+        const a = rng() * 6.283, vx = Math.round(cx0 + Math.cos(a) * R), vz = Math.round(cz0 + Math.sin(a) * R);
+        const dir = Math.abs(Math.cos(a)) > Math.abs(Math.sin(a)) ? (Math.cos(a) > 0 ? 1 : 2) : (Math.sin(a) > 0 ? 3 : 4);
+        vine(vx, y + h - 1, vz, dir, 2 + Math.floor(rng() * 5));
+      }
+      return;
+    }
+    case 'junglebush': {
+      blob(x, y + 1, z, 1.8, B.JUNGLE_LEAVES, 1.4);
+      set(x, y, z, B.JUNGLE_LOG, false);
       return;
     }
     case 'acacia': {

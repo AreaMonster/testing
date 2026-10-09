@@ -1197,6 +1197,154 @@ for (const [mat, [base, dark, light]] of Object.entries(MAT_COLORS)) {
   });
 }
 
+// ---------- mobs & structures update ----------
+add('log_jungle', (px, rnd) => {
+  paintBark([110, 84, 50], [74, 56, 32])(px, rnd);
+  for (let i = 0; i < 10; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), [78, 110, 44]);
+});
+add('log_jungle_top', paintLogTop([172, 128, 80], [150, 108, 64], [104, 80, 48]));
+add('planks_jungle', paintPlanks([168, 118, 84]));
+add('leaves_jungle', (px, rnd) => {
+  paintLeaves(px, rnd);
+  for (let i = 0; i < 10; i++) { const x = Math.floor(rnd() * 15), y = Math.floor(rnd() * 15); px.set(x, y, [236, 236, 236]); px.set(x + 1, y + 1, [180, 180, 180]); }
+});
+add('vines', (px, rnd) => {
+  clear(px);
+  for (const x0 of [1, 4, 7, 10, 13]) {
+    let x = x0 + Math.floor(rnd() * 2);
+    const len = 8 + Math.floor(rnd() * 8);
+    for (let y = 0; y < len; y++) {
+      const v = 0.6 + rnd() * 0.4;
+      px.set(x, y, [200 * v, 200 * v, 200 * v]);
+      if (rnd() < 0.35) px.set(x + 1, y, [170 * v, 170 * v, 170 * v]);
+      if (rnd() < 0.2) x += rnd() < 0.5 ? 1 : -1;
+    }
+  }
+});
+add('cobweb', (px) => {
+  clear(px);
+  const c = [236, 236, 240];
+  for (let k = 0; k < 16; k++) { px.set(k, k, c, 200); px.set(15 - k, k, c, 200); px.set(7, k, c, 170); px.set(k, 8, c, 170); }
+  for (const r of [3, 6]) for (let a = 0; a < 24; a++) { const t = a / 24 * Math.PI * 2; px.set(Math.round(7.5 + Math.cos(t) * r), Math.round(7.5 + Math.sin(t) * r), c, 150); }
+});
+add('path_top', (px, rnd) => {
+  px.each((x, y) => px.set(x, y, mul([150, 122, 74], 0.86 + rnd() * 0.2)));
+  for (let i = 0; i < 12; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), [120, 96, 60]);
+});
+add('path_side', (px, rnd) => {
+  paintDirt(px, rnd);
+  for (let x = 0; x < 16; x++) { px.set(x, 0, mul([150, 122, 74], 0.9 + rnd() * 0.15)); if (rnd() < 0.6) px.set(x, 1, [130, 104, 64]); }
+});
+
+// Creature skins for the new mobs (original designs; one layer per box face, native pixels).
+const fur = (base, amp) => (px, rnd) => { const f = field(rnd, 1); px.each((x, y) => px.set(x, y, mul(base, 1 - amp / 2 + f[y * 16 + x] * amp + (rnd() - 0.5) * 0.06))); };
+// Chicken: white plumage, orange beak and legs, red wattle.
+add('ck_body', fur([238, 236, 228], 0.12));
+add('ck_head_front', (px, rnd) => { fur([240, 238, 230], 0.08)(px, rnd); px.set(0, 1, [20, 20, 20]); px.set(3, 1, [20, 20, 20]); });
+add('ck_beak', (px) => px.each((x, y) => px.set(x, y, [236, 160, 40])));
+add('ck_wattle', (px) => px.each((x, y) => px.set(x, y, [200, 40, 40])));
+add('ck_leg', (px) => px.each((x, y) => px.set(x, y, [226, 150, 46])));
+// Rabbit: soft brown fur with a pale belly.
+add('rb_fur', fur([150, 112, 78], 0.16));
+add('rb_face', (px, rnd) => { fur([158, 120, 86], 0.12)(px, rnd); px.set(0, 1, [24, 16, 12]); px.set(3, 1, [24, 16, 12]); px.set(1, 2, [220, 160, 160]); px.set(2, 2, [220, 160, 160]); });
+add('rb_ear', (px, rnd) => { fur([150, 112, 78], 0.1)(px, rnd); px.each((x, y) => { if (x === 0) px.set(x, y, [222, 170, 160]); }); });
+add('rb_tail', (px) => px.each((x, y) => px.set(x, y, [240, 236, 228])));
+// Goat: shaggy cream coat, grey horns, dark hooves.
+add('gt_coat', fur([222, 214, 196], 0.18));
+add('gt_face', (px, rnd) => { fur([214, 204, 186], 0.1)(px, rnd); px.set(0, 2, [40, 30, 20]); px.set(3, 2, [40, 30, 20]); px.set(1, 5, [120, 100, 80]); px.set(2, 5, [120, 100, 80]); });
+add('gt_horn', (px) => px.each((x, y) => px.set(x, y, y % 2 ? [150, 146, 136] : [176, 172, 162])));
+add('gt_leg', (px, rnd) => { fur([214, 206, 188], 0.12)(px, rnd); for (let x = 0; x < 4; x++) { px.set(x, 7, [62, 52, 44]); px.set(x, 8, [62, 52, 44]); } });
+// Fox: rust orange with white muzzle and dark paws.
+add('fx_fur', fur([214, 112, 42], 0.14));
+add('fx_face', (px, rnd) => {
+  fur([214, 112, 42], 0.1)(px, rnd);
+  for (let y = 3; y < 6; y++) for (let x = 0; x < 6; x++) px.set(x, y, [240, 236, 226]);
+  px.set(1, 2, [24, 18, 14]); px.set(4, 2, [24, 18, 14]);
+});
+add('fx_snout', (px) => { px.each((x, y) => px.set(x, y, [240, 236, 226])); px.set(1, 0, [30, 24, 20]); });
+add('fx_tail', (px, rnd) => { fur([214, 112, 42], 0.12)(px, rnd); px.each((x, y) => { if (y > 6) px.set(x, y, [244, 240, 232]); }); });
+add('fx_leg', (px, rnd) => { fur([200, 104, 40], 0.1)(px, rnd); px.each((x, y) => { if (y > 3) px.set(x, y, [44, 32, 26]); }); });
+// Spider: dusky purple-brown carapace with amber eyes and banded legs.
+add('sp_body', (px, rnd) => { fur([62, 48, 52], 0.25)(px, rnd); for (let i = 0; i < 10; i++) px.set(Math.floor(rnd() * 16), Math.floor(rnd() * 16), [96, 70, 64]); });
+add('sp_face', (px, rnd) => {
+  fur([56, 44, 48], 0.2)(px, rnd);
+  [[1, 2], [6, 2], [2, 3], [5, 3], [3, 2], [4, 2]].forEach(([x, y], i) => px.set(x, y, i < 4 ? [255, 176, 40] : [210, 90, 30]));
+  px.set(3, 6, [190, 180, 160]); px.set(4, 6, [190, 180, 160]);
+});
+add('sp_leg', (px) => px.each((x, y) => px.set(x, y, x % 4 < 2 ? [70, 54, 56] : [110, 84, 70])));
+// Bone archer: pale bones under a ragged hooded cloak (the hood hides most of the face).
+const BN = { bone: [222, 216, 196], boneD: [176, 168, 148], cloak: [70, 78, 64], cloakD: [50, 56, 46], eye: [120, 200, 255] };
+const cloakFill = (px, rnd) => px.each((x, y) => px.set(x, y, rnd() < 0.2 ? BN.cloakD : BN.cloak));
+add('ba_head_front', (px, rnd) => {
+  cloakFill(px, rnd);
+  for (let y = 2; y < 8; y++) for (let x = 1; x < 7; x++) px.set(x, y, BN.bone);
+  px.set(2, 4, [20, 20, 24]); px.set(5, 4, [20, 20, 24]); px.set(2, 4, BN.eye); px.set(5, 4, BN.eye);
+  for (let x = 2; x < 6; x++) px.set(x, 6, x % 2 ? [40, 36, 30] : BN.boneD);
+});
+add('ba_hood', cloakFill);
+add('ba_body', (px, rnd) => {
+  cloakFill(px, rnd);
+  for (let y = 1; y < 9; y++) { px.set(3, y, BN.bone); px.set(4, y, BN.bone); }
+  for (const y of [2, 4, 6]) for (let x = 2; x < 6; x++) px.set(x, y, BN.boneD);
+  for (let x = 0; x < 8; x++) if (rnd() < 0.5) px.set(x, 11, [30, 30, 30]);
+});
+add('ba_limb', (px) => px.each((x, y) => px.set(x, y, x === 0 || x === 3 ? BN.boneD : BN.bone)));
+add('ba_sleeve', (px, rnd) => { cloakFill(px, rnd); px.each((x, y) => { if (y > 6) px.set(x, y, x === 0 || x === 3 ? BN.boneD : BN.bone); }); });
+// Settler: villager-folk in a moss-green smock with a wide straw hat.
+const ST = { skin: [196, 144, 108], skinD: [170, 120, 88], smock: [86, 122, 70], smockD: [66, 98, 54], apron: [190, 170, 130], straw: [220, 192, 110], strawD: [184, 154, 82] };
+add('st_head_front', (px, rnd) => {
+  px.each((x, y) => px.set(x, y, mul(ST.skin, 0.96 + rnd() * 0.06)));
+  for (let x = 0; x < 8; x++) px.set(x, 0, [92, 60, 38]);
+  px.set(1, 3, [250, 250, 250]); px.set(2, 3, [60, 110, 70]); px.set(5, 3, [60, 110, 70]); px.set(6, 3, [250, 250, 250]);
+  px.set(3, 4, ST.skinD); px.set(4, 4, ST.skinD); px.set(3, 5, ST.skinD); px.set(4, 5, ST.skinD);
+  for (let x = 2; x < 6; x++) px.set(x, 7, [110, 76, 50]);
+});
+add('st_head', (px, rnd) => { px.each((x, y) => px.set(x, y, mul(ST.skin, 0.96 + rnd() * 0.06))); for (let x = 0; x < 8; x++) { px.set(x, 0, [92, 60, 38]); px.set(x, 1, [92, 60, 38]); } });
+add('st_hat', (px, rnd) => px.each((x, y) => px.set(x, y, (x + y) % 3 === 0 ? ST.strawD : mul(ST.straw, 0.94 + rnd() * 0.1))));
+add('st_body', (px, rnd) => {
+  px.each((x, y) => px.set(x, y, rnd() < 0.15 ? ST.smockD : ST.smock));
+  for (let y = 4; y < 12; y++) for (let x = 2; x < 6; x++) px.set(x, y, ST.apron);
+  for (let x = 0; x < 8; x++) px.set(x, 3, [96, 70, 44]);
+});
+add('st_side', (px, rnd) => { px.each((x, y) => px.set(x, y, rnd() < 0.15 ? ST.smockD : ST.smock)); for (let x = 0; x < 8; x++) px.set(x, 3, [96, 70, 44]); });
+add('st_arm', (px, rnd) => { px.each((x, y) => px.set(x, y, rnd() < 0.15 ? ST.smockD : ST.smock)); for (let y = 9; y < 12; y++) for (let x = 0; x < 4; x++) px.set(x, y, ST.skin); });
+add('st_leg', (px) => px.each((x, y) => px.set(x, y, y > 9 ? [70, 48, 30] : [92, 86, 76])));
+add('arrow_ent', (px) => { clear(px); for (let x = 0; x < 16; x++) px.set(x, 7, x > 12 ? [200, 200, 210] : x < 3 ? [240, 240, 240] : [130, 96, 56]); px.set(1, 6, [240, 240, 240]); px.set(1, 8, [240, 240, 240]); });
+
+// item sprites
+sprite('feather', (px) => {
+  for (let k = 0; k < 11; k++) { px.set(3 + k, 13 - k, [236, 236, 230]); px.set(4 + k, 13 - k, [206, 206, 200]); if (k > 2) { px.set(2 + k, 12 - k, [250, 250, 246]); px.set(5 + k, 14 - k, [214, 214, 208]); } }
+  px.set(2, 14, [150, 140, 120]);
+});
+sprite('flint', (px) => {
+  const rows = [[5, 7, 9], [6, 5, 11], [7, 4, 11], [8, 4, 12], [9, 5, 11], [10, 6, 10], [11, 7, 9]];
+  for (const [y, a, b] of rows) for (let x = a; x <= b; x++) px.set(x, y, x < 7 ? [96, 96, 104] : x > 9 ? [44, 44, 50] : [66, 66, 74]);
+});
+sprite('raw_chicken', slab([240, 196, 176], [230, 170, 150], [250, 220, 206]));
+sprite('cooked_chicken', slab([198, 132, 72], [170, 104, 52], [220, 166, 106]));
+sprite('raw_rabbit', slab([214, 140, 130], [190, 110, 104], [236, 186, 176]));
+sprite('cooked_rabbit', slab([176, 112, 66], [150, 90, 50], [204, 146, 96]));
+sprite('bone', (px) => {
+  for (let k = 0; k < 8; k++) { px.set(4 + k, 11 - k, [230, 226, 210]); px.set(5 + k, 11 - k, [196, 190, 172]); }
+  [[2, 12], [3, 13], [3, 11], [2, 11], [12, 3], [13, 4], [11, 2], [12, 2]].forEach(([x, y]) => px.set(x, y, [236, 232, 218]));
+});
+sprite('string', (px) => { for (let k = 0; k < 12; k++) px.set(2 + k, 8 + Math.round(Math.sin(k * 0.9) * 2), [236, 236, 236]); });
+sprite('arrow', (px) => {
+  for (let k = 0; k < 10; k++) px.set(3 + k, 12 - k, [130, 96, 56]);
+  [[12, 3], [13, 2], [13, 3], [12, 2], [11, 2], [13, 4]].forEach(([x, y]) => px.set(x, y, [190, 190, 200]));
+  [[2, 12], [3, 13], [2, 13], [4, 13], [2, 11]].forEach(([x, y]) => px.set(x, y, [240, 240, 240]));
+});
+sprite('bow', (px) => {
+  for (let a = 0; a < 18; a++) { const t = -1.1 + a * 0.13; const x = Math.round(5 + Math.cos(t) * 8), y = Math.round(8 + Math.sin(t) * 7); px.set(x - 3, y, a % 3 ? [140, 100, 56] : [100, 70, 38]); }
+  for (let y = 2; y < 15; y++) px.set(3, y, [230, 230, 230]);
+});
+sprite('egg', (px) => {
+  for (let y = 3; y < 14; y++) for (let x = 3; x < 13; x++) {
+    const d = Math.hypot((x - 7.5) / 4.6, (y - 8.8) / (y < 9 ? 5.6 : 4.8));
+    if (d < 1) px.set(x, y, x + y < 13 ? [252, 246, 232] : x + y > 19 ? [206, 190, 160] : [236, 224, 196]);
+  }
+});
+
 export const LAYER_COUNT = layerData.length;
 
 export function textureArrayData() {
