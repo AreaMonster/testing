@@ -17,14 +17,20 @@ export const BIOME_NAMES = [
   'River', 'Savanna', 'Badlands', 'Swamp', 'Birch Forest', 'Taiga', 'Meadow', 'Deep Ocean', 'Stony Shore', 'Cherry Grove', 'Jungle',
   'Dark Forest', 'Ice Spikes', 'Warm Ocean',
 ];
-const GRASSY = new Set([BIOME.PLAINS, BIOME.FOREST, BIOME.BIRCH_FOREST, BIOME.MEADOW, BIOME.TAIGA, BIOME.SNOWY, BIOME.SAVANNA, BIOME.SWAMP, BIOME.CHERRY, BIOME.JUNGLE, BIOME.DARK_FOREST]);
+// Chance per column that a tree grows there, by biome.
+export const TREE_DENSITY = {
+  [BIOME.DARK_FOREST]: 0.11, [BIOME.ICE_SPIKES]: 0.007,
+  [BIOME.FOREST]: 0.06, [BIOME.BIRCH_FOREST]: 0.06, [BIOME.PLAINS]: 0.006, [BIOME.MEADOW]: 0.003,
+  [BIOME.TAIGA]: 0.05, [BIOME.SNOWY]: 0.016, [BIOME.SAVANNA]: 0.012, [BIOME.SWAMP]: 0.022, [BIOME.PEAKS]: 0.004, [BIOME.CHERRY]: 0.03, [BIOME.JUNGLE]: 0.075,
+};
+export const GRASSY = new Set([BIOME.PLAINS, BIOME.FOREST, BIOME.BIRCH_FOREST, BIOME.MEADOW, BIOME.TAIGA, BIOME.SNOWY, BIOME.SAVANNA, BIOME.SWAMP, BIOME.CHERRY, BIOME.JUNGLE, BIOME.DARK_FOREST]);
 
 const idx = (x, y, z) => (y << 8) | (z << 4) | x;
 const BLOCKS_LEAFY = new Set([B.LEAVES, B.BIRCH_LEAVES, B.SPRUCE_LEAVES, B.ACACIA_LEAVES, B.CHERRY_LEAVES, B.JUNGLE_LEAVES, B.DARK_OAK_LEAVES, B.RED_MUSHROOM_BLOCK, B.BROWN_MUSHROOM_BLOCK]);
 const BLOCKS_WOOD = new Set([B.LOG, B.BIRCH_LOG, B.SPRUCE_LOG, B.ACACIA_LOG, B.CHERRY_LOG, B.JUNGLE_LOG, B.DARK_OAK_LOG, B.MUSHROOM_STEM, B.CACTUS, B.PUMPKIN, B.MELON]);
 
 // Terracotta strata for badlands, repeating with height.
-const BANDS = (() => {
+export const BANDS = (() => {
   const r = mulberry32(991);
   const opts = [B.TERRACOTTA, B.TERRACOTTA_ORANGE, B.TERRACOTTA, B.TERRACOTTA_YELLOW, B.TERRACOTTA_WHITE, B.TERRACOTTA_BROWN, B.TERRACOTTA_RED, B.TERRACOTTA, B.TERRACOTTA_ORANGE];
   const a = [];
@@ -301,8 +307,8 @@ export class WorldGen {
     for (const v of this.villagesNear(chunk.cx, chunk.cz)) this.paintVillage(chunk, v);
   }
 
-  // Replaces stone near the surface with biome materials, adds water and ice.
-  paintColumn(bl, x, z, wx, wz, col, biome, steep, top) {
+  // Surface materials for a column: [top, filler, filler depth, under, under depth].
+  surfaceBlocks(col, biome, steep, top, wx, wz) {
     const r = hash2(wx, wz, this.seed);
     const cold = col.T < -0.6;
     let topB = B.GRASS, filler = B.DIRT, depth = 3 + (r < 0.5 ? 1 : 0), under = 0, underDepth = 0;
@@ -337,6 +343,13 @@ export class WorldGen {
       }
     }
     if (steep && biome !== BIOME.BADLANDS && biome !== BIOME.PEAKS && top > SEA) { topB = B.STONE; filler = B.STONE; }
+    return [topB, filler, depth, under, underDepth];
+  }
+
+  // Replaces stone near the surface with biome materials, adds water and ice.
+  paintColumn(bl, x, z, wx, wz, col, biome, steep, top) {
+    const cold = col.T < -0.6;
+    const [topB, filler, depth, under, underDepth] = this.surfaceBlocks(col, biome, steep, top, wx, wz);
     const badlands = biome === BIOME.BADLANDS;
     const bandOff = Math.floor(this.patch.noise2(wx / 40, wz / 40) * 2);
     let depthLeft = -1, airAbove = true, first = true;
@@ -516,11 +529,7 @@ export class WorldGen {
     if (steep) return null;
     const biome = this.biomeOf(col, h, steep);
     if (!GRASSY.has(biome) && !(biome === BIOME.PEAKS && h < 92) && biome !== BIOME.ICE_SPIKES) return null;
-    const density = {
-      [BIOME.DARK_FOREST]: 0.11, [BIOME.ICE_SPIKES]: 0.007,
-      [BIOME.FOREST]: 0.06, [BIOME.BIRCH_FOREST]: 0.06, [BIOME.PLAINS]: 0.006, [BIOME.MEADOW]: 0.003,
-      [BIOME.TAIGA]: 0.05, [BIOME.SNOWY]: 0.016, [BIOME.SAVANNA]: 0.012, [BIOME.SWAMP]: 0.022, [BIOME.PEAKS]: 0.004, [BIOME.CHERRY]: 0.03, [BIOME.JUNGLE]: 0.075,
-    }[biome] || 0;
+    const density = TREE_DENSITY[biome] || 0;
     if (r >= density) return null;
     if (this.isCave(wx, h, wz) || this.isCave(wx, h - 1, wz)) return null;
     const r2 = hash2(wx, wz, this.seed ^ 0x77);

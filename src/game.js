@@ -82,14 +82,17 @@ class GenPool {
     this.workers = [];
     this.pending = new Map();
     this.ready = [];
+    this.lodReady = [];
+    this.lodInflight = 0;
     this.failed = false;
-    const n = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 4) - 1));
+    const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
     try {
       for (let i = 0; i < n; i++) {
         const w = new Worker(new URL('./genworker.js', import.meta.url), { type: 'module' });
         const slot = { w, jobs: 0 };
         w.onmessage = (e) => this.done(slot, e.data);
         w.onerror = (e) => { e.preventDefault?.(); this.fail(); };
+        w.postMessage({ layers: LAYERS });
         this.workers.push(slot);
       }
     } catch {
@@ -112,9 +115,18 @@ class GenPool {
     this.pending.set(this.key(epoch, cx, cz), best);
     best.w.postMessage({ id: epoch, seed, cx, cz });
   }
+  // Far-terrain tile job; shares the workers but never blocks chunk generation.
+  requestLod(epoch, seed, key, x0, z0, step) {
+    let best = this.workers[0];
+    for (const s of this.workers) if (s.jobs < best.jobs) best = s;
+    best.jobs++;
+    this.lodInflight++;
+    best.w.postMessage({ lod: true, id: epoch, seed, key, x0, z0, step });
+  }
   done(slot, d) {
     slot.jobs--;
-    this.pending.delete(this.key(d.id, d.cx, d.cz));
+    if (d.lod) { this.lodInflight--; this.lodReady.push(d); return; }
+    // Stays "pending" until the main thread adopts it, so it is never requested twice.
     this.ready.push(d);
   }
 }
@@ -160,7 +172,7 @@ class MeshPool {
 let chunkUid = 0;
 
 const DEFAULT_SETTINGS = {
-  renderDist: 8, fov: 75, sensitivity: 1, gamma: 0.85, music: 0.4, sfx: 0.8,
+  renderDist: 32, detailDist: 10, fov: 75, sensitivity: 1, gamma: 0.85, music: 0.4, sfx: 0.8,
   bob: true, fancyLeaves: true, clouds: true, invertY: false, scale: 1, post: true, shaders: 2,
 };
 // The sun's path is tilted toward the south so noon shadows have some shape.
@@ -173,7 +185,7 @@ export class Game {
     this.audio = audio;
     this.renderer = new Renderer(canvas);
     this.settings = Object.assign({}, DEFAULT_SETTINGS, Store.loadSettings());
-    if (matchMedia('(pointer: coarse)').matches && !Store.loadSettings().renderDist) { this.settings.renderDist = 5; this.settings.shaders = 0; }
+    if (matchMedia('(pointer: coarse)').matches && !Store.loadSettings().renderDist) { this.settings.renderDist = 16; this.settings.detailDist = 5; this.settings.shaders = 0; }
     this.state = 'menu';
     this.world = null;
     this.player = new Player();
@@ -234,6 +246,8 @@ export class Game {
   // ---------------------------------------------------------------- worlds
   disposeWorld() {
     this.epoch++;
+    this.pool.pending.clear();
+    if (this.lod) { this.freeLod(Infinity, -1); for (const t of this.lod.tiles.values()) if (t.mesh) { this.renderer.free(t.mesh.o); this.renderer.free(t.mesh.w); } this.lod = null; }
     this.pool.ready.length = 0;
     if (!this.world) return;
     for (const c of this.world.chunks.values()) this.renderer.freeChunk(c);
@@ -340,9 +354,100 @@ export class Game {
     return true;
   }
 
+  // Radius (in chunks) of fully loaded, editable chunks; the far terrain covers the rest.
+  detailRadius() {
+    const s = this.settings;
+    return Math.max(2, Math.min(s.renderDist, s.detailDist, this.state === 'menu' ? 6 : 32));
+  }
+  viewRadius() {
+    return Math.max(this.detailRadius(), this.state === 'menu' ? Math.min(this.settings.renderDist, 32) : this.settings.renderDist);
+  }
+
+  // Far terrain: a quadtree of tiles around the camera. Tile size doubles with
+  // distance (64 blocks at 2-block cells, 128 at 4, ...). Missing tiles fall back
+  // to their parent so the horizon never shows holes, and stale tiles are freed.
+  updateLod() {
+    const p = this.player, w = this.world, pool = this.pool;
+    const D = this.detailRadius(), R = this.viewRadius() * 16;
+    const lod = this.lod || (this.lod = { tiles: new Map(), draw: [] });
+    const now = performance.now();
+    for (const d of pool.lodReady) {
+      const t = lod.tiles.get(d.key);
+      if (d.id !== this.epoch || !t) continue;
+      t.pending = false;
+      t.mesh = { o: this.renderer.upload(d.o), w: this.renderer.upload(d.w), minY: d.minY, maxY: d.maxY };
+    }
+    pool.lodReady.length = 0;
+    lod.draw = [];
+    if (R <= D * 16 + 24 || pool.failed) { this.freeLod(now, 0); return; }
+    const cx = p.ix, cz = p.iz;
+    const inner = (D - 1) * 16;
+    let Lmax = 0;
+    while ((64 << Lmax) < R / 2 && Lmax < 12) Lmax++;
+    const req = [];
+    const visit = (L, tx, tz, out) => {
+      const S = 64 << L, x0 = tx * S, z0 = tz * S;
+      const dx = Math.max(x0 - cx, 0, cx - (x0 + S)), dz = Math.max(z0 - cz, 0, cz - (z0 + S));
+      const d = Math.hypot(dx, dz);
+      if (d > R) return true;
+      const far = Math.max(Math.abs(x0 - cx), Math.abs(x0 + S - cx)) ** 2 + Math.max(Math.abs(z0 - cz), Math.abs(z0 + S - cz)) ** 2;
+      const covered = far < inner * inner;
+      const key = `${L}:${tx}:${tz}`;
+      let t = lod.tiles.get(key);
+      if (t) t.used = now;
+      const split = L > 0 && !covered && d < S * 1.25;
+      if (split) {
+        const kids = [];
+        let all = true;
+        for (let k = 0; k < 4; k++) all = visit(L - 1, tx * 2 + (k & 1), tz * 2 + (k >> 1), kids) && all;
+        if (all) { out.push(...kids); return true; }
+        if (t && t.mesh) { out.push(t); return true; }
+        out.push(...kids);
+      } else if (t && t.mesh) { out.push(t); return true; }
+      if (!t) { t = { key, x0, z0, step: S / 32, used: now, pending: false, mesh: null }; lod.tiles.set(key, t); }
+      if (!t.pending) req.push([d / S + (covered ? 4 : 0), t]);
+      return false;
+    };
+    const top = 64 << Lmax;
+    const r0x = Math.floor((cx - R) / top), r1x = Math.floor((cx + R) / top), r0z = Math.floor((cz - R) / top), r1z = Math.floor((cz + R) / top);
+    for (let tz = r0z; tz <= r1z; tz++) for (let tx = r0x; tx <= r1x; tx++) visit(Lmax, tx, tz, lod.draw);
+    req.sort((a, b) => a[0] - b[0]);
+    // Far tiles use idle worker slots; chunks near the player always come first.
+    let genJobs = -pool.lodInflight;
+    for (const sl of pool.workers) genJobs += sl.jobs;
+    const room = pool.workers.length * (genJobs > 0 ? 1 : 2) - pool.lodInflight;
+    for (let i = 0; i < Math.min(room, req.length); i++) {
+      const t = req[i][1];
+      t.pending = true;
+      pool.requestLod(this.epoch, w.seed, t.key, t.x0, t.z0, t.step);
+    }
+    this.freeLod(now, 4000);
+  }
+
+  // 128x128 chunk grid around the camera: 1 where a real chunk mesh hides the far terrain.
+  lodMask(cam) {
+    const m = this.lodMaskBuf || (this.lodMaskBuf = new Uint8Array(128 * 128));
+    m.fill(0);
+    const pcx = Math.floor(cam.x / 16), pcz = Math.floor(cam.z / 16);
+    for (const c of this.chunkList || []) {
+      const i = c.cx - pcx + 64, j = c.cz - pcz + 64;
+      if (i >= 0 && j >= 0 && i < 128 && j < 128) m[j * 128 + i] = 255;
+    }
+    return { data: m, x: (pcx - 64) * 16 - cam.x, z: (pcz - 64) * 16 - cam.z };
+  }
+
+  freeLod(now, keepMs) {
+    if (!this.lod) return;
+    for (const [k, t] of this.lod.tiles) {
+      if (t.pending || now - t.used <= keepMs) continue;
+      if (t.mesh) { this.renderer.free(t.mesh.o); this.renderer.free(t.mesh.w); }
+      this.lod.tiles.delete(k);
+    }
+  }
+
   streamChunks(budget) {
     const w = this.world, p = this.player;
-    const R = this.state === 'menu' ? Math.min(this.settings.renderDist, 7) : this.settings.renderDist;
+    const R = this.detailRadius();
     const pcx = Math.floor(p.x / 16), pcz = Math.floor(p.z / 16);
     const t0 = performance.now();
     const genR2 = (R + 1.5) ** 2, meshR2 = (R + 0.5) ** 2;
@@ -351,6 +456,7 @@ export class Game {
     // Adopt finished worker results; lighting does not depend on arrival order.
     while (pool.ready.length && performance.now() - t0 < budget) {
       const d = pool.ready.shift();
+      pool.pending.delete(pool.key(d.id, d.cx, d.cz));
       if (d.id !== this.epoch || w.getChunk(d.cx, d.cz)) continue;
       if ((d.cx - pcx) ** 2 + (d.cz - pcz) ** 2 > (R + 3) ** 2) continue;
       const c = w.insertChunkData(d.cx, d.cz, d);
@@ -1949,8 +2055,11 @@ export class Game {
     const p = this.player, w = this.world;
     const cam = this.cameraState();
     const sky = this.skyState(cam);
-    const R = this.state === 'menu' ? Math.min(this.settings.renderDist, 7) : this.settings.renderDist;
-    const far = R * 16 + 24;
+    this.updateLod();
+    const R = this.viewRadius(), D = this.detailRadius();
+    const lodOn = this.lod && this.lod.draw.length > 0;
+    const far = lodOn ? Math.hypot((D + 1.5) * 16, 160) : R * 16 + 24;
+    const lodFar = R * 16 + 128;
     const wet = this.weather.rain;
     let fog = { color: sky.fog, start: R * 16 * 0.55 * (1 - wet * 0.55), end: R * 16 * 0.95 * (1 - wet * 0.3) };
     const eyeLiquid = LIQUID[w.getBlock(Math.floor(cam.x), Math.floor(cam.y), Math.floor(cam.z))];
@@ -1995,6 +2104,7 @@ export class Game {
     const L = w.getLight(Math.floor(p.x), Math.floor(p.y + p.eye), Math.floor(p.z));
     const frame = {
       cam, far, fog, daylight: this.daylight, time: this.time, gamma: this.settings.gamma,
+      lod: lodOn ? { tiles: this.lod.draw, far: lodFar, mask: this.lodMask(cam) } : null, cloudFar: lodOn ? Math.min(lodFar, 2400) : far,
       sky: { sunDir: sky.sunDir, top: sky.top, horizon: sky.horizon, sunset: sky.sunset, night: sky.night, starRot: sky.starRot, axis: sky.axis },
       shade, light: sky.light, rays: shade > 1 && eyeLiquid !== 1 ? sky.rays : null,
       chunks: this.chunkList || [], entities: ents, particles: this.particles, shadows,

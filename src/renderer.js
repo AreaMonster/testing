@@ -87,6 +87,9 @@ uniform vec3 uSkyTop;
 uniform vec3 uSkyHorizon;
 uniform vec3 uCamPos;
 uniform float uTime;
+uniform float uLod;
+uniform highp sampler2D uLodMask;
+uniform vec2 uMaskOrigin;
 in vec3 vUV;
 in vec3 vRel;
 flat in int vFlags;
@@ -116,6 +119,11 @@ float shadowAt(vec3 p, vec3 n) {
   return mix(sh, 1.0, smoothstep(0.82, 1.0, edge));
 }
 void main() {
+  if (uLod > 0.5) {
+    // Far terrain steps aside wherever a real chunk is loaded.
+    ivec2 m = ivec2(floor((vRel.xz - uMaskOrigin) / 16.0));
+    if (m.x >= 0 && m.y >= 0 && m.x < 128 && m.y < 128 && texelFetch(uLodMask, m, 0).r > 0.5) discard;
+  }
   vec4 c = texture(uTex, vUV);
   if (c.a < uAlphaTest) discard;
   c.rgb *= vTint;
@@ -448,6 +456,15 @@ export class Renderer {
     this.shadow = null;
     this.lightVP = new Float32Array(16);
     this.dummyShadow = this.makeShadowTex(1);
+    this.projFar = new Mat4();
+    this.pvFar = new Mat4();
+    this.frustumFar = new Frustum();
+    this.maskTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 128, 128, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array(128 * 128));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     this.weatherMesh = null;
     this.proj = new Mat4();
     this.view = new Mat4();
@@ -897,6 +914,14 @@ export class Renderer {
     this.handProj.perspective((70 * Math.PI) / 180, aspect, 0.01, 10);
   }
 
+  // Projection for the far terrain, which gets its own slice of the depth buffer.
+  setupFarCamera(cam, far) {
+    const aspect = this.canvas.width / this.canvas.height;
+    this.projFar.perspective((cam.fov * Math.PI) / 180, aspect, 4, far);
+    multiply(this.pvFar.m, this.projFar.m, this.view.m);
+    this.frustumFar.setFromMatrix(this.pvFar.m);
+  }
+
   // f: frame description assembled by the game each frame.
   render(f) {
     const gl = this.gl;
@@ -908,6 +933,7 @@ export class Renderer {
     let texel = 0;
     if (lit) texel = this.renderShadow(f, S, radius);
     const post = this.ensurePost(f.post, shade > 0);
+    gl.depthRange(0, 1);
     gl.bindFramebuffer(gl.FRAMEBUFFER, post ? post.scene.fb : null);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     this.setupCamera(cam, f.far);
@@ -979,6 +1005,18 @@ export class Renderer {
     }
     gl.enable(gl.CULL_FACE);
     gl.disable(gl.BLEND);
+    gl.uniform1f(u.uLod, 0);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTex);
+    gl.uniform1i(u.uLodMask, 3);
+    gl.activeTexture(gl.TEXTURE0);
+    let cloudsDone = false;
+    if (f.lod) {
+      cloudsDone = this.drawLod(f, u) && f.clouds && cam.y < 118;
+      if (cloudsDone) this.drawClouds(f, this.pvFar, f.cloudFar);
+    }
+    // Everything near goes in front of the far terrain.
+    gl.depthRange(0, 0.5);
     let drawn = 0, quads = 0;
     const visible = [];
     for (const c of f.chunks) {
@@ -1064,35 +1102,7 @@ export class Renderer {
     }
 
     // Clouds
-    if (f.clouds) {
-      gl.useProgram(this.cloud.p);
-      const cu = this.cloud.u;
-      gl.enable(gl.BLEND);
-      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
-      gl.disable(gl.CULL_FACE);
-      gl.depthMask(false);
-      gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, this.cloudTex);
-      gl.uniform1i(cu.uCloud, 1);
-      gl.uniformMatrix4fv(cu.uProjView, false, this.pv.m);
-      gl.uniform3f(cu.uCam, cam.x, cam.y, cam.z);
-      gl.uniform1f(cu.uY, 124);
-      gl.uniform1f(cu.uSize, f.far);
-      gl.uniform2f(cu.uOffset, f.clouds.offset, 0);
-      gl.uniform3fv(cu.uColor, f.clouds.color);
-      gl.uniform1f(cu.uFar, f.far);
-      gl.uniform1f(cu.uCover, f.cloudCover || 0);
-      gl.bindVertexArray(this.cloudVAO);
-      for (let layer = 1; layer >= 0; layer--) {
-        gl.uniform1f(cu.uLayer, layer);
-        gl.uniform1f(cu.uY, 124 + layer * 3.5);
-        gl.uniform2f(cu.uOffset, f.clouds.offset + layer * 37, layer * 53);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-      }
-      gl.depthMask(true);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.useProgram(bp.p);
-    }
+    if (f.clouds && !cloudsDone) this.drawClouds(f, this.pv, f.far);
 
     // Water (back to front)
     gl.uniform1f(u.uOpaque, 0);
@@ -1146,7 +1156,9 @@ export class Renderer {
 
     // Held item / arm
     if (f.hand && f.hand.mesh) {
-      gl.clear(gl.DEPTH_BUFFER_BIT);
+      // The held item gets the very front of the depth range instead of a depth clear,
+      // so the depth buffer still tells sky from terrain for the light shafts.
+      gl.depthRange(0, 0.02);
       gl.uniformMatrix4fv(u.uProjView, false, this.handProj.m);
       gl.uniformMatrix4fv(u.uModel, false, f.hand.model);
       gl.uniform3f(u.uOffset, 0, 0, 0);
@@ -1160,8 +1172,94 @@ export class Renderer {
       gl.drawElements(gl.TRIANGLES, f.hand.mesh.count, gl.UNSIGNED_INT, 0);
       gl.enable(gl.CULL_FACE);
     }
+    gl.depthRange(0, 1);
     if (post) this.postProcess(f);
     gl.bindVertexArray(null);
+  }
+
+  drawClouds(f, pv, far) {
+    const gl = this.gl, cam = f.cam, bp = this.block;
+    gl.useProgram(this.cloud.p);
+    const cu = this.cloud.u;
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+    gl.disable(gl.CULL_FACE);
+    gl.depthMask(false);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.cloudTex);
+    gl.uniform1i(cu.uCloud, 1);
+    gl.uniformMatrix4fv(cu.uProjView, false, pv.m);
+    gl.uniform3f(cu.uCam, cam.x, cam.y, cam.z);
+    gl.uniform1f(cu.uY, 124);
+    gl.uniform1f(cu.uSize, far);
+    gl.uniform2f(cu.uOffset, f.clouds.offset, 0);
+    gl.uniform3fv(cu.uColor, f.clouds.color);
+    gl.uniform1f(cu.uFar, far);
+    gl.uniform1f(cu.uCover, f.cloudCover || 0);
+    gl.bindVertexArray(this.cloudVAO);
+    for (let layer = 1; layer >= 0; layer--) {
+      gl.uniform1f(cu.uLayer, layer);
+      gl.uniform1f(cu.uY, 124 + layer * 3.5);
+      gl.uniform2f(cu.uOffset, f.clouds.offset + layer * 37, layer * 53);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+    gl.depthMask(true);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.useProgram(bp.p);
+    gl.disable(gl.BLEND);
+    gl.enable(gl.CULL_FACE);
+  }
+
+  // Far terrain tiles (opaque, then water) in the back half of the depth range.
+  drawLod(f, u) {
+    const gl = this.gl, cam = f.cam, L = f.lod;
+    this.setupFarCamera(cam, L.far);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.maskTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 128, 128, gl.RED, gl.UNSIGNED_BYTE, L.mask.data);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.depthRange(0.5, 1);
+    gl.uniformMatrix4fv(u.uProjView, false, this.pvFar.m);
+    gl.uniform1f(u.uLod, 1);
+    gl.uniform2f(u.uMaskOrigin, L.mask.x, L.mask.z);
+    const vis = [];
+    let quads = 0;
+    for (const t of L.tiles) {
+      const m = t.mesh;
+      const x0 = t.x0 - cam.x, z0 = t.z0 - cam.z, S = t.step * 32;
+      if (!this.frustumFar.boxVisible(x0, m.minY - cam.y, z0, x0 + S, m.maxY - cam.y, z0 + S)) continue;
+      vis.push(t);
+      if (!m.o) continue;
+      gl.uniform3f(u.uOffset, x0, -cam.y, z0);
+      gl.uniform3f(u.uChunk, t.x0, 0, t.z0);
+      gl.bindVertexArray(m.o.vao);
+      gl.drawElements(gl.TRIANGLES, m.o.count, gl.UNSIGNED_INT, 0);
+      quads += m.o.quads;
+    }
+    this.stats.lodTiles = vis.length;
+    this.stats.lodQuads = quads;
+    // Far water, blended.
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+    gl.depthMask(false);
+    gl.uniform1f(u.uOpaque, 0);
+    gl.uniform1f(u.uAlphaTest, 0.01);
+    for (const t of vis) {
+      const m = t.mesh;
+      if (!m.w) continue;
+      gl.uniform3f(u.uOffset, t.x0 - cam.x, -cam.y, t.z0 - cam.z);
+      gl.uniform3f(u.uChunk, t.x0, 0, t.z0);
+      gl.bindVertexArray(m.w.vao);
+      gl.drawElements(gl.TRIANGLES, m.w.count, gl.UNSIGNED_INT, 0);
+    }
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.uniform1f(u.uOpaque, 1);
+    gl.uniform1f(u.uAlphaTest, 0.5);
+    gl.uniform1f(u.uLod, 0);
+    gl.uniformMatrix4fv(u.uProjView, false, this.pv.m);
+    gl.uniform3f(u.uChunk, 0, 0, 0);
+    return true;
   }
 
   drawParticles(f, u) {

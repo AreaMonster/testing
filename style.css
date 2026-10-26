@@ -288,3 +288,8 @@ body.touch #crosshair { opacity: 0.8; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+.slider > label { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 6px; }
+.slider-row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+.slider-row input[type="range"] { flex: 1; }
+.slider .num { flex: none; width: 72px; background: var(--slot); color: inherit; border: 2px solid var(--line); padding: 4px 6px; font: inherit; }

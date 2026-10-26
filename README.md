@@ -14,7 +14,8 @@ Then open the printed URL in a recent Chrome, Edge, Firefox or Safari.
 
 ## Features
 
-- **Infinite world.** 16×16×128 chunks stream in around you with frustum culling and a configurable render distance.
+- **Infinite world.** 16×16×128 chunks stream in around you with frustum culling.
+- **Any render distance.** Type any number of chunks (100, 300, more) in Settings. Full, editable chunks load out to the *detail distance*. Beyond that, far terrain is drawn from a quadtree of tiles sampled straight from the terrain generator, with cells that double in size with distance, so cost grows roughly with the logarithm of the distance. Forests, mountains, beaches, rivers and seas all show on the horizon. Far terrain has its own slice of the depth buffer so it stays crisp, steps aside wherever real chunks are loaded, and fills in gaps while nearby chunks are still loading.
 - **Terrain.** Height comes from smooth curves over continentalness, erosion and ridge noise, so there are deep oceans, wide beaches, broad plains, rolling hills and great mountain ranges with jagged peaks. Rivers wind across the land, and biomes span hundreds of blocks. A light 3D density pass adds cliffs and overhangs, but only in the mountains.
 - **Biomes.** Oceans, warm oceans with coral reefs, kelp forests, beaches and stony shores, plains, flower meadows, cherry groves, jungles with giant trees and hanging vines, forests, birch forests, dark forests with giant mushrooms, swamps, taiga, snowy taiga, ice spike fields, savannas with acacia trees, deserts, terraced badlands mesas with banded terracotta, and snow-capped peaks.
 - **Trees and features.** Big oaks with branches, tall spruces and birches, bushes, fallen logs, mossy boulders, sugar cane along the water, pumpkins and ferns.
@@ -82,7 +83,8 @@ Punch a tree for logs and turn them into planks in your inventory grid. Four pla
 | `src/game.js` | Player controller, interaction, survival rules, ticks, mob spawning, chunk streaming |
 | `src/world.js` | Chunk storage, block updates, flood-fill lighting, fluid simulation |
 | `src/worldgen.js` | Terrain density, biomes, rivers, caves, ores, trees and plants |
-| `src/genworker.js` | Web Worker that runs chunk generation off the main thread |
+| `src/genworker.js` | Web Worker that runs chunk generation and far-terrain tiles off the main thread |
+| `src/lod.js` | Far-terrain tile builder (heights, surface blocks, canopies and water from the terrain functions) |
 | `src/meshworker.js` | Web Worker that builds chunk meshes off the main thread |
 | `src/mesher.js` | Chunk meshing with smooth lighting and AO, shaped blocks, plus item, sprite and mob meshes |
 | `src/renderer.js` | WebGL 2 shaders and passes (shadow map, terrain, water, sky, clouds, particles, held item, bloom, light shafts, tone mapping) |

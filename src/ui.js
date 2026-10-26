@@ -190,9 +190,10 @@ export class UI {
     click('btn-death-title', () => { g.quitToTitle(); });
     $('clicktoplay').addEventListener('click', () => this.lock());
 
-    const keys = ['renderDist', 'shaders', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale'];
+    const keys = ['renderDist', 'detailDist', 'shaders', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale'];
     const fmt = {
-      renderDist: (v) => (v > 16 ? `${v} chunks (needs a fast computer)` : `${v} chunks`), fov: (v) => `${v}°`, sensitivity: (v) => `${Math.round(v * 100)}%`,
+      renderDist: (v) => `${v} chunks · ${(v * 16).toLocaleString()} blocks`,
+      detailDist: (v) => `${v} chunks${v > 16 ? ' (needs a fast computer)' : ''}`, fov: (v) => `${v}°`, sensitivity: (v) => `${Math.round(v * 100)}%`,
       gamma: (v) => `${Math.round(v * 100)}%`, music: (v) => `${Math.round(v * 100)}%`, sfx: (v) => `${Math.round(v * 100)}%`,
       scale: (v) => `${Math.round(v * 100)}%`, shaders: (v) => ['Off', 'Fast (shadows)', 'Fancy (soft shadows, light shafts)'][v | 0],
     };
@@ -204,6 +205,17 @@ export class UI {
       });
     }
     this.fmt = fmt;
+    // Type any render distance; the slider only covers the common range.
+    $('num-renderDist').addEventListener('change', (e) => {
+      const v = Math.max(2, Math.min(9999, Math.round(parseFloat(e.target.value) || g.settings.renderDist)));
+      g.settings.renderDist = v;
+      e.target.value = v;
+      $('set-renderDist').value = Math.min(256, v);
+      $('out-renderDist').textContent = fmt.renderDist(v);
+      g.applySettings();
+    });
+    $('num-renderDist').addEventListener('keydown', (e) => e.stopPropagation());
+    $('set-renderDist').addEventListener('input', () => { $('num-renderDist').value = g.settings.renderDist; });
     for (const k of ['bob', 'fancyLeaves', 'clouds', 'invertY', 'post']) {
       $(`set-${k}`).addEventListener('change', (e) => { g.settings[k] = e.target.checked; g.applySettings(); });
     }
@@ -211,10 +223,11 @@ export class UI {
 
   renderSettings() {
     const s = this.game.settings;
-    for (const k of ['renderDist', 'shaders', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale']) {
+    for (const k of ['renderDist', 'detailDist', 'shaders', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale']) {
       $(`set-${k}`).value = s[k];
       $(`out-${k}`).textContent = this.fmt[k](s[k]);
     }
+    $('num-renderDist').value = s.renderDist;
     for (const k of ['bob', 'fancyLeaves', 'clouds', 'invertY', 'post']) $(`set-${k}`).checked = !!s[k];
   }
 
