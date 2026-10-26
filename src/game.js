@@ -3,7 +3,7 @@ import { Renderer } from './renderer.js';
 import { buildChunkMesh, packChunk } from './mesher.js';
 import { World, ckey } from './world.js';
 import { WorldGen, BIOME, BIOME_NAMES, placeTree } from './worldgen.js';
-import { B, I, BLOCKS, ITEMS, OPAQUE, SOLID, LIQUID, REPLACEABLE, TEXL, LOG, SHAPE, CLIMB, blockSpan, itemDef, itemName, maxStackOf, canHarvest, breakTime, toolOf, nameToId } from './blocks.js';
+import { B, I, BLOCKS, ITEMS, OPAQUE, SOLID, LIQUID, REPLACEABLE, TEXL, LOG, SHAPE, CLIMB, WATERLOGGED, blockSpan, itemDef, itemName, maxStackOf, canHarvest, breakTime, toolOf, nameToId } from './blocks.js';
 import { Inventory, SMELT, SMELT_TIME, fuelTime } from './crafting.js';
 import { Entity, ItemEntity, FallingBlock, Mob, Arrow, MOB_TYPES, poseDraws, mobParts } from './entities.js';
 import { moveEntity, raycast, rayBox, entityBox, groundBelow, boxTouches } from './physics.js';
@@ -39,6 +39,7 @@ class Player extends Entity {
     this.air = 15;
     this.mode = 'survival';
     this.inv = new Inventory(36);
+    this.armor = new Inventory(4);
     this.sel = 0;
     this.alive = true;
     this.hurtT = 0;
@@ -276,10 +277,16 @@ export class Game {
         spawn: st.spawn || [st.x, st.y, st.z], flying: !!st.flying && st.mode === 'creative',
       });
       p.inv.load(st.inv);
+      if (st.armor) p.armor.load(st.armor);
       this.world.time = st.time ?? 1000;
       this.world.day = st.day || 0;
       if (st.weather) Object.assign(this.weather, st.weather, { rain: st.weather.target });
       if (st.tiles) for (const [k, v] of Object.entries(st.tiles)) this.world.tileEntities.set(k, v);
+      for (const [x, y, z, health, sit] of st.pets || []) {
+        const m = new Mob('wolf', x, y, z);
+        Object.assign(m, { owner: true, health, sitting: !!sit });
+        this.entities.push(m);
+      }
       if (p.health <= 0) { p.health = 20; [p.x, p.y, p.z] = p.spawn; }
     } else {
       const s = this.gen.findSpawn();
@@ -308,7 +315,8 @@ export class Game {
     const p = this.player;
     ok = this.store.saveState({
       x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch, health: p.health, hunger: p.hunger, sat: p.sat,
-      mode: p.mode, sel: p.sel, inv: p.inv.toJSON(), spawn: p.spawn, flying: p.flying,
+      mode: p.mode, sel: p.sel, inv: p.inv.toJSON(), armor: p.armor.toJSON(), spawn: p.spawn, flying: p.flying,
+      pets: this.entities.filter((e) => e.owner && e.health > 0).map((e) => [+e.x.toFixed(2), +e.y.toFixed(2), +e.z.toFixed(2), e.health, e.sitting ? 1 : 0]),
       time: this.world.time, day: this.world.day, weather: { target: this.weather.target, timer: this.weather.timer, thunder: this.weather.thunder }, tiles: Object.fromEntries(this.world.tileEntities),
     }) && ok;
     if (this.meta) { this.meta.lastPlayed = Date.now(); this.meta.mode = p.mode; Store.upsertWorld(this.meta); }
@@ -441,9 +449,12 @@ export class Game {
   animalsFor(biome) {
     switch (biome) {
       case BIOME.PLAINS: case BIOME.MEADOW: return ['pig', 'cow', 'sheep', 'chicken', 'rabbit'];
-      case BIOME.FOREST: case BIOME.BIRCH_FOREST: case BIOME.CHERRY: return ['pig', 'chicken', 'rabbit', 'sheep'];
-      case BIOME.TAIGA: return ['fox', 'rabbit', 'sheep', 'fox'];
-      case BIOME.SNOWY: return ['fox', 'rabbit'];
+      case BIOME.FOREST: return ['pig', 'chicken', 'rabbit', 'sheep', 'wolf'];
+      case BIOME.BIRCH_FOREST: case BIOME.CHERRY: return ['pig', 'chicken', 'rabbit', 'sheep'];
+      case BIOME.DARK_FOREST: return ['wolf', 'pig', 'chicken', 'bear'];
+      case BIOME.TAIGA: return ['fox', 'rabbit', 'sheep', 'wolf', 'wolf', 'bear'];
+      case BIOME.SNOWY: return ['fox', 'rabbit', 'wolf', 'bear'];
+      case BIOME.ICE_SPIKES: return ['fox', 'rabbit'];
       case BIOME.PEAKS: return ['goat', 'goat', 'sheep'];
       case BIOME.SAVANNA: return ['cow', 'sheep', 'chicken'];
       case BIOME.JUNGLE: return ['chicken', 'pig'];
@@ -472,6 +483,15 @@ export class Game {
         const m = new Mob('settler', x + 0.5, this.gen.surfaceAt(x, z) + 2, z + 0.5);
         m.home = [v.cx, v.cz];
         this.entities.push(m);
+      }
+    }
+    // Fish in open water.
+    if (rand() < 0.2) {
+      const lx = Math.floor(rand() * 16), lz = Math.floor(rand() * 16);
+      const x = c.cx * 16 + lx, z = c.cz * 16 + lz;
+      if (c.blocks[(SEA << 8) | (lz << 4) | lx] === B.WATER && c.blocks[((SEA - 3) << 8) | (lz << 4) | lx] === B.WATER) {
+        const n = 2 + Math.floor(rand() * 4);
+        for (let i = 0; i < n; i++) this.entities.push(new Mob('trout', x + rand(), SEA - 2 - rand() * 2, z + rand()));
       }
     }
     if (rand() > 0.12) return;
@@ -782,12 +802,35 @@ export class Game {
       p.cactusT += dt;
       if (p.cactusT > 0.5) { p.cactusT = 0; this.damagePlayer(1, null, 'was pricked to death'); }
     }
+    b[1] -= 0.1;
+    if (!p.sneaking && boxTouches(w, b, (id) => id === B.CAMPFIRE)) {
+      p.fireT = (p.fireT || 0) + dt;
+      if (p.fireT > 0.5) { p.fireT = 0; this.damagePlayer(1, null, 'walked into a campfire'); }
+    }
   }
 
   damagePlayer(n, src, cause = 'was slain', bypass = false) {
     const p = this.player;
     if (!p.alive || p.mode !== 'survival' || n <= 0) return;
     if (p.invuln > 0 && !bypass) return;
+    // Worn armour soaks 4% per point (fall, drowning and starvation go straight through).
+    if (!bypass && cause !== 'fell from a high place') {
+      let pts = 0;
+      for (let i = 0; i < 4; i++) {
+        const a = p.armor.get(i);
+        if (!a) continue;
+        const ad = ITEMS[a.id].armor;
+        pts += ad.points;
+        a.dmg = (a.dmg || 0) + 1;
+        if (a.dmg >= ad.dur) { p.armor.set(i, null); this.audio.play('toolbreak'); this.ui.chat(`Your ${itemName(a.id)} broke.`); }
+      }
+      if (pts) {
+        const r = n * (1 - Math.min(20, pts) / 25);
+        n = Math.floor(r) + (rand() < r - Math.floor(r) ? 1 : 0);
+        p.armor.changed();
+        if (n <= 0) { p.invuln = 0.5; this.audio.block('metal', 'hit'); return; }
+      }
+    }
     p.health -= n;
     p.hurtT = 0.4;
     p.invuln = 0.5;
@@ -797,6 +840,7 @@ export class Game {
       const dx = p.x - src.x, dz = p.z - src.z, d = Math.hypot(dx, dz) || 1;
       p.vx = (dx / d) * 8; p.vz = (dz / d) * 8; p.vy = 7.2;
       cause = `was slain by a ${src.def.name}`;
+      this.petsAttack(src);
     }
     if (p.health <= 0) this.die(cause);
   }
@@ -805,11 +849,11 @@ export class Game {
     const p = this.player;
     p.health = 0;
     p.alive = false;
-    for (let i = 0; i < p.inv.slots.length; i++) {
-      const s = p.inv.slots[i];
+    for (const s of [...p.inv.slots, ...p.armor.slots]) {
       if (s) this.dropItem(p.x, p.y + 1, p.z, s, [(rand() - 0.5) * 6, 3 + rand() * 3, (rand() - 0.5) * 6]);
     }
     p.inv.clear();
+    p.armor.clear();
     this.mining = null;
     this.ui.closeInventory(true);
     this.state = 'dead';
@@ -909,7 +953,7 @@ export class Game {
       this.mouse.rightPressed = false;
       return;
     }
-    if (this.mouse.right && def && def.food && (p.hunger < 20 || p.mode === 'creative') && !(hit && BLOCKS[hit.id].interact && !p.sneaking)) {
+    if (this.mouse.right && def && def.food && (p.hunger < 20 || p.mode === 'creative') && !(hit && BLOCKS[hit.id].interact && !p.sneaking) && !(mob && mob.owner)) {
       p.eating += dt;
       if (Math.floor(p.eating * 4) !== Math.floor((p.eating - dt) * 4)) { this.audio.play('eat'); this.swing(0.3); }
       if (p.eating >= 1.4) {
@@ -977,13 +1021,20 @@ export class Game {
       this.ui.containerRemoved(key);
     }
     const below = w.getBlock(x, y - 1, z);
-    w.setBlock(x, y, z, id === B.ICE && survival && below !== 0 ? B.WATER : 0);
+    // Water-logged plants leave their water behind; doors take their other half along.
+    w.setBlock(x, y, z, (id === B.ICE && survival && below !== 0) || WATERLOGGED[id] ? B.WATER : 0);
+    if (SHAPE[id] === 4) {
+      const oy = meta & 8 ? y - 1 : y + 1;
+      if (w.getBlock(x, oy, z) === id) w.setBlock(x, oy, z, 0);
+    }
     this.audio.block(BLOCKS[id].sound, 'break');
     this.spawnBlockParticles(x + 0.5, y + 0.5, z + 0.5, id, 26, 1);
     if (survival) {
       const held = p.held();
-      if (canHarvest(id, held)) for (const [did, n] of this.dropsFor(id, meta)) this.dropItem(x + 0.5, y + 0.4, z + 0.5, { id: did, count: n });
       const tool = toolOf(held);
+      const sheared = tool && tool.type === 'shears' && (BLOCKS[id].leaf || id === B.TALL_GRASS || id === B.FERN || id === B.VINES || id === B.COBWEB || id === B.SEAGRASS);
+      if (sheared) this.dropItem(x + 0.5, y + 0.4, z + 0.5, { id, count: 1 });
+      else if (canHarvest(id, held)) for (const [did, n] of this.dropsFor(id, meta)) this.dropItem(x + 0.5, y + 0.4, z + 0.5, { id: did, count: n });
       if (tool && BLOCKS[id].hardness > 0) this.damageTool(tool.type === 'sword' ? 2 : 1);
       p.exhaustion += 0.005;
     }
@@ -1005,6 +1056,8 @@ export class Game {
     }
     if (id === B.DEAD_BUSH) return rand() < 0.6 ? [[I.STICK, 1 + Math.floor(rand() * 2)]] : [];
     if (id === B.GRAVEL) return rand() < 0.12 ? [[I.FLINT, 1]] : [[B.GRAVEL, 1]];
+    if (id === B.RED_MUSHROOM_BLOCK || id === B.BROWN_MUSHROOM_BLOCK) return rand() < 0.35 ? [[d.drop, 1 + Math.floor(rand() * 2)]] : [];
+    if (id === B.CAMPFIRE) return [[I.COAL, 2]];
     return [[d.drop === undefined ? id : d.drop, 1]];
   }
 
@@ -1034,13 +1087,31 @@ export class Game {
   use(hit, mob) {
     const p = this.player, w = this.world;
     const held = p.held();
+    if (mob && this.useOnMob(mob, held)) return;
     if (hit && BLOCKS[hit.id].interact && !p.sneaking) {
       if (BLOCKS[hit.id].interact === 'bed') this.sleep(hit);
+      else if (BLOCKS[hit.id].interact === 'door') this.toggleDoor(hit.x, hit.y, hit.z);
       else this.openContainer(BLOCKS[hit.id].interact, hit);
       return;
     }
     if (!held) return;
     const def = itemDef(held.id);
+    if (def.armor) {
+      // Wear it, swapping with whatever is in that slot.
+      const cur = p.armor.get(def.armor.slot);
+      p.armor.set(def.armor.slot, { ...held, count: 1 });
+      p.inv.set(p.sel, cur);
+      this.audio.block('metal', 'place');
+      this.swing(0.3);
+      return;
+    }
+    if (held.id === I.BONE_MEAL && hit) {
+      if (this.boneMeal(hit.x, hit.y, hit.z)) {
+        this.swing();
+        if (p.mode === 'survival') this.consumeHeld();
+      }
+      return;
+    }
     const [dx, dy, dz] = this.lookDir();
     const tool = toolOf(held);
     if (tool && tool.type === 'hoe' && hit && hit.ny >= 0 && (hit.id === B.GRASS || hit.id === B.DIRT || hit.id === B.PODZOL || hit.id === B.SNOWY_GRASS)) {
@@ -1098,6 +1169,12 @@ export class Game {
     }
     if (!def.isBlock) return;
     const bd = BLOCKS[held.id];
+    if (WATERLOGGED[held.id] && !(LIQUID[cur] === 1 && w.getMeta(tx, ty, tz) === 0)) return;
+    if (SHAPE[held.id] === 4) {
+      // Doors are two blocks tall and need room above.
+      const up = w.getBlock(tx, ty + 1, tz);
+      if (ty + 1 >= CH || (up && !REPLACEABLE[up]) || !SOLID[w.getBlock(tx, ty - 1, tz)]) return;
+    }
     if (bd.solid) {
       const bb = [tx, ty, tz, tx + 1, ty + 1, tz + 1];
       const overlap = (e) => {
@@ -1123,17 +1200,109 @@ export class Game {
       else if (hit.ny === 0 && OPAQUE[support]) meta = hit.nx === 1 ? 1 : hit.nx === -1 ? 2 : hit.nz === 1 ? 3 : 4;
       else if (OPAQUE[w.getBlock(tx, ty - 1, tz)]) meta = 0;
       else return;
-    } else if (bd.support && !this.supported(tx, ty, tz, held.id, 0)) return;
+    } else if (bd.support && bd.support !== 'drip' && !this.supported(tx, ty, tz, held.id, 0)) return;
     if (bd.front) {
       const lx = dx, lz = dz;
       meta = Math.abs(lx) > Math.abs(lz) ? (lx > 0 ? 1 : 0) : lz > 0 ? 5 : 4;
     }
+    // Stairs and doors face the way the player looks (0 +x, 1 -x, 2 +z, 3 -z).
+    const facing = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? 0 : 1) : dz > 0 ? 2 : 3;
+    if (SHAPE[held.id] === 3) meta = facing | (hit.ny === -1 || (hit.ny === 0 && hitY - Math.floor(hitY) > 0.5) ? 4 : 0);
+    if (SHAPE[held.id] === 4) meta = facing;
+    if (held.id === B.POINTED_DRIPSTONE) meta = hit.ny === -1 ? 1 : 0;
+    if (bd.support === 'drip' && !this.supported(tx, ty, tz, held.id, meta)) return;
     w.setBlock(tx, ty, tz, held.id, meta);
+    if (SHAPE[held.id] === 4) w.setBlock(tx, ty + 1, tz, held.id, meta | 8);
     if (bd.interact === 'chest') w.tileEntities.set(`${tx},${ty},${tz}`, { type: 'chest', slots: new Array(27).fill(null) });
     if (bd.interact === 'furnace') w.tileEntities.set(`${tx},${ty},${tz}`, { type: 'furnace', slots: [null, null, null], burn: 0, burnMax: 0, cook: 0 });
     this.audio.block(bd.sound, 'place');
     this.swing();
     if (p.mode === 'survival') this.consumeHeld();
+  }
+
+  toggleDoor(x, y, z) {
+    const w = this.world, id = w.getBlock(x, y, z), meta = w.getMeta(x, y, z);
+    const by = meta & 8 ? y - 1 : y;
+    const m = (w.getMeta(x, by, z) & 7) ^ 4;
+    w.setBlock(x, by, z, id, m);
+    if (w.getBlock(x, by + 1, z) === id) w.setBlock(x, by + 1, z, id, m | 8);
+    this.audio.block('wood', m & 4 ? 'place' : 'hit');
+    this.swing(0.3);
+  }
+
+  // Bone meal: ripens crops, grows saplings and sprouts grass and flowers.
+  boneMeal(x, y, z) {
+    const w = this.world, id = w.getBlock(x, y, z);
+    const sparkle = (px, py, pz) => this.spawnPoof(px + 0.5, py + 0.5, pz + 0.5, 6, [120, 220, 90]);
+    if (id === B.WHEAT) {
+      const m = w.getMeta(x, y, z);
+      if (m >= 7) return false;
+      w.setBlock(x, y, z, B.WHEAT, Math.min(7, m + 2 + Math.floor(rand() * 3)));
+      sparkle(x, y, z);
+      return true;
+    }
+    if (id === B.OAK_SAPLING || id === B.BIRCH_SAPLING || id === B.SPRUCE_SAPLING) {
+      if (rand() < 0.45) this.growSapling(x, y, z, id);
+      sparkle(x, y, z);
+      return true;
+    }
+    if (id === B.GRASS) {
+      for (let i = 0; i < 24; i++) {
+        const ax = x + Math.round((rand() - 0.5) * 6), az = z + Math.round((rand() - 0.5) * 6);
+        for (let ay = y + 2; ay >= y - 2; ay--) {
+          if (w.getBlock(ax, ay, az) === B.GRASS && w.getBlock(ax, ay + 1, az) === 0) {
+            const r = rand();
+            w.setBlock(ax, ay + 1, az, r < 0.75 ? B.TALL_GRASS : r < 0.85 ? B.POPPY : r < 0.93 ? B.BUTTERCUP : B.DAISY);
+            break;
+          }
+        }
+      }
+      sparkle(x, y + 1, z);
+      return true;
+    }
+    if (id === B.SEAGRASS || (LIQUID[id] === 1 && w.getBlock(x, y - 1, z) === B.SAND)) {
+      sparkle(x, y, z);
+      return true;
+    }
+    return false;
+  }
+
+  // Right-clicking a creature: shear sheep, tame or command wolves, feed animals.
+  useOnMob(mob, held) {
+    const p = this.player;
+    const tool = toolOf(held);
+    if (mob.type === 'sheep' && tool && tool.type === 'shears' && !mob.sheared) {
+      mob.sheared = true;
+      mob.regrowT = 120 + rand() * 120;
+      this.dropItem(mob.x, mob.y + 1, mob.z, { id: B.WOOL_WHITE, count: 1 + Math.floor(rand() * 3) });
+      this.audio.block('wool', 'break');
+      this.swing();
+      if (p.mode === 'survival') this.damageTool(1);
+      return true;
+    }
+    if (mob.type === 'wolf') {
+      if (!mob.owner && held && held.id === I.BONE) {
+        if (p.mode === 'survival') this.consumeHeld();
+        this.swing();
+        if (rand() < 0.34 || p.mode === 'creative') {
+          mob.owner = true; mob.angry = 0; mob.health = mob.def.health * 2; mob.sitting = true;
+          this.spawnPoof(mob.x, mob.y + 1, mob.z, 8, [230, 60, 80]);
+          this.ui.chat('The wolf trusts you now. Right-click it to make it sit or follow.');
+        } else this.spawnPoof(mob.x, mob.y + 1, mob.z, 5, [90, 90, 90]);
+        return true;
+      }
+      if (mob.owner) {
+        const food = held && itemDef(held.id).food && (held.id === I.RAW_BEEF || held.id === I.STEAK || held.id === I.RAW_PORK || held.id === I.COOKED_PORK || held.id === I.ROTTEN_FLESH || held.id === I.RAW_CHICKEN);
+        if (food && mob.health < mob.def.health * 2) {
+          mob.health = Math.min(mob.def.health * 2, mob.health + itemDef(held.id).food);
+          if (p.mode === 'survival') this.consumeHeld();
+          this.spawnPoof(mob.x, mob.y + 1, mob.z, 5, [230, 60, 80]);
+        } else mob.sitting = !mob.sitting;
+        this.swing(0.3);
+        return true;
+      }
+    }
+    return false;
   }
 
   supported(x, y, z, id, meta) {
@@ -1161,6 +1330,13 @@ export class Game {
         return !!OPAQUE[wall] || !!BLOCKS[wall].leaf;
       }
       case 'mushroom': return !!OPAQUE[below];
+      case 'sea': return !!SOLID[below] && !WATERLOGGED[below];
+      case 'kelp': return below === B.KELP || (!!SOLID[below] && !WATERLOGGED[below]);
+      case 'drip': {
+        if (meta === 1) { const up = w.getBlock(x, y + 1, z); return !!SOLID[up] || (up === B.POINTED_DRIPSTONE && w.getMeta(x, y + 1, z) === 1); }
+        return !!SOLID[below] || (below === B.POINTED_DRIPSTONE && w.getMeta(x, y - 1, z) === 0);
+      }
+      case 'door': return meta & 8 ? below === id : !!SOLID[below];
       case 'any': return !!SOLID[below] || !!SOLID[w.getBlock(x, y + 1, z)];
       case 'torch': {
         if (!meta) return !!OPAQUE[below];
@@ -1200,8 +1376,10 @@ export class Game {
       return;
     }
     if (d.support && !this.supported(x, y, z, id, w.getMeta(x, y, z))) {
-      w.setBlock(x, y, z, 0);
-      if (this.player.mode === 'survival' || id === B.CACTUS) for (const [did, n] of this.dropsFor(id, w.getMeta(x, y, z))) this.dropItem(x + 0.5, y + 0.3, z + 0.5, { id: did, count: n });
+      const m = w.getMeta(x, y, z);
+      w.setBlock(x, y, z, WATERLOGGED[id] ? B.WATER : 0);
+      const upperDoor = SHAPE[id] === 4 && m & 8;
+      if ((this.player.mode === 'survival' || id === B.CACTUS) && !upperDoor) for (const [did, n] of this.dropsFor(id, m)) this.dropItem(x + 0.5, y + 0.3, z + 0.5, { id: did, count: n });
       this.spawnBlockParticles(x + 0.5, y + 0.5, z + 0.5, id, 8, 0.6);
     }
   }
@@ -1401,12 +1579,19 @@ export class Game {
 
   spawnMobs() {
     const p = this.player, w = this.world;
-    let hostile = 0, passive = 0;
+    let hostile = 0, passive = 0, bats = 0;
     for (const e of this.entities) {
-      if (!(e instanceof Mob)) continue;
+      if (!(e instanceof Mob) || e.owner) continue;
       const d = Math.hypot(e.x - p.x, e.z - p.z);
-      if (d > 110 || (e.def.hostile && d > 50 && rand() < 0.05) || (e.def.hostile && this.daylight > 0.8 && d > 24 && rand() < 0.02)) { e.dead = true; continue; }
-      if (e.def.hostile) hostile++; else passive++;
+      if (d > 110 || ((e.def.hostile || e.def.flies) && d > 50 && rand() < 0.05) || (e.def.hostile && !e.def.cave && this.daylight > 0.8 && d > 24 && rand() < 0.02)) { e.dead = true; continue; }
+      if (e.def.hostile) hostile++; else if (e.def.flies) bats++; else passive++;
+    }
+    // Bats flutter around dark caves.
+    if (bats < 4 && rand() < 0.03) {
+      const x = Math.floor(p.x + (rand() - 0.5) * 40), z = Math.floor(p.z + (rand() - 0.5) * 40), y = Math.floor(Math.min(p.y + 8, 50) - rand() * 24);
+      if (w.isLoaded(x, z) && y > 4 && w.getBlock(x, y, z) === 0 && w.getBlock(x, y + 1, z) === 0 && (w.getLight(x, y, z) >> 4) === 0 && (w.getLight(x, y, z) & 15) < 5) {
+        this.entities.push(new Mob('bat', x + 0.5, y, z + 0.5));
+      }
     }
     if (hostile < 10) {
       for (let attempt = 0; attempt < 6; attempt++) {
@@ -1422,7 +1607,9 @@ export class Game {
         const L = w.getLight(x, y, z);
         if (Math.max((L >> 4) * this.daylight, L & 15) >= 7) continue;
         const roll = rand();
-        this.entities.push(new Mob(roll < 0.5 ? 'ghoul' : roll < 0.78 ? 'spider' : 'archer', x + 0.5, y, z + 0.5));
+        let type = roll < 0.42 ? 'ghoul' : roll < 0.62 ? 'spider' : roll < 0.82 ? 'archer' : 'boomshroom';
+        if (y < 52 && (L >> 4) === 0 && rand() < 0.35) type = 'beetle';
+        this.entities.push(new Mob(type, x + 0.5, y, z + 0.5));
         break;
       }
     }
@@ -1444,7 +1631,52 @@ export class Game {
 
   onMobDeath(m) {
     this.spawnPoof(m.x, m.y + m.h * 0.5, m.z, 14, [230, 230, 230]);
-    for (const [id, n] of m.def.drops()) this.dropItem(m.x, m.y + 0.5, m.z, { id, count: n });
+    for (const [id, n] of m.def.drops()) if (n > 0 && !(m.sheared && id === B.WOOL_WHITE)) this.dropItem(m.x, m.y + 0.5, m.z, { id, count: n });
+    if (m.owner) this.ui.chat('Your wolf has died.');
+  }
+
+  // Tamed wolves go after whatever the player fights (or whatever fights the player).
+  petsAttack(mob) {
+    if (!mob || mob.owner || !(mob instanceof Mob)) return;
+    for (const e of this.entities) if (e.owner && !e.sitting && e !== mob) e.target = mob;
+  }
+
+  // Blast that breaks blocks and hurts everything nearby.
+  explode(x, y, z, power, src) {
+    const w = this.world, p = this.player;
+    this.audio.play('boom', { vol: Math.max(0.15, 1 - Math.hypot(x - p.x, y - p.y, z - p.z) / 40) });
+    const r = Math.ceil(power);
+    for (let dy = -r; dy <= r; dy++) for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+      const d = Math.hypot(dx, dy, dz) + rand() * 0.8;
+      if (d > power) continue;
+      const bx = Math.floor(x) + dx, by = Math.floor(y) + dy, bz = Math.floor(z) + dz;
+      const id = w.getBlock(bx, by, bz);
+      if (!id || LIQUID[id] || BLOCKS[id].hardness < 0 || BLOCKS[id].hardness >= 20) continue;
+      const key = `${bx},${by},${bz}`, te = w.tileEntities.get(key);
+      if (te) { for (const st of te.slots) if (st) this.dropItem(bx + 0.5, by + 0.5, bz + 0.5, st); w.tileEntities.delete(key); this.ui.containerRemoved(key); }
+      w.setBlock(bx, by, bz, WATERLOGGED[id] ? B.WATER : 0);
+      if (rand() < 0.3) for (const [did, n] of this.dropsFor(id, 0)) this.dropItem(bx + 0.5, by + 0.5, bz + 0.5, { id: did, count: n });
+    }
+    for (let i = 0; i < 40; i++) {
+      this.particles.push({
+        x: x + (rand() - 0.5) * power, y: y + (rand() - 0.5) * power, z: z + (rand() - 0.5) * power,
+        vx: (rand() - 0.5) * 6, vy: rand() * 4, vz: (rand() - 0.5) * 6, life: 0.8 + rand() * 1.2, size: 0.25 + rand() * 0.3,
+        layer: L('white'), u: 0, v: 0, uvs: 1, tint: rand() < 0.3 ? [255, 210, 120] : [120, 120, 120], bright: 255, light: [255, 255], grav: -0.5, glow: rand() < 0.3,
+      });
+    }
+    const hurt = (e, isPlayer) => {
+      const cx = e.x, cy = e.y + e.h * 0.5, cz = e.z;
+      const d = Math.hypot(cx - x, cy - y, cz - z);
+      if (d > power * 2) return;
+      const k = 1 - d / (power * 2);
+      const kx = (cx - x) / (d || 1), kz = (cz - z) / (d || 1);
+      const dmg = Math.round(k * k * 22 + k * 4);
+      e.vx += kx * k * 14; e.vz += kz * k * 14; e.vy += k * 9;
+      if (isPlayer) this.damagePlayer(dmg, null, src ? `was blown up by a ${src.def.name}` : 'blew up');
+      else e.damage(dmg, null, this);
+    };
+    if (p.alive) hurt(p, true);
+    for (const e of this.entities) if (e instanceof Mob && e.health > 0 && e !== src) hurt(e, false);
   }
 
   // ---------------------------------------------------------------- particles
@@ -1495,7 +1727,7 @@ export class Game {
         if (!c) continue;
         for (let i = y0 << 8; i < (y1 + 1) << 8; i++) {
           const b = c.blocks[i];
-          if (b === B.TORCH) list.push([c.cx * 16 + (i & 15), i >> 8, c.cz * 16 + ((i >> 4) & 15), c.meta[i]]);
+          if (b === B.TORCH || b === B.CAMPFIRE) list.push([c.cx * 16 + (i & 15), i >> 8, c.cz * 16 + ((i >> 4) & 15), b === B.CAMPFIRE ? -1 : c.meta[i]]);
           else if (b === B.WATER) water++;
           else if (BLOCKS[b].leaf) leaves++;
         }
@@ -1509,6 +1741,16 @@ export class Game {
     while (this.flameT <= 0) {
       this.flameT += 0.6 / this.torches.length + 0.02;
       const [x, y, z, m] = this.torches[Math.floor(rand() * this.torches.length)];
+      if (m < 0) {
+        // Campfire: a tall column of grey smoke.
+        if (w.getBlock(x, y, z) !== B.CAMPFIRE) continue;
+        for (let k = 0; k < 2; k++) this.particles.push({
+          x: x + 0.3 + rand() * 0.4, y: y + 0.6, z: z + 0.3 + rand() * 0.4, vx: (rand() - 0.5) * 0.15, vy: 1.4 + rand() * 0.6, vz: (rand() - 0.5) * 0.15,
+          life: 3 + rand() * 2, size: 0.14 + rand() * 0.1, layer: LAYERS.white, u: 0, v: 0, uvs: 1,
+          tint: [96, 96, 100], bright: 220, light: [255, 0], grav: -0.15,
+        });
+        continue;
+      }
       if (w.getBlock(x, y, z) !== B.TORCH) continue;
       const off = [null, [-1, 0], [1, 0], [0, -1], [0, 1]][m] || [0, 0];
       const tx = x + 0.5 + off[0] * 0.08, ty = y + (m ? 0.86 : 0.66), tz = z + 0.5 + off[1] * 0.08;
@@ -1696,8 +1938,11 @@ export class Game {
   }
 
   selectionBox(t) {
-    const [y0, y1] = SHAPE[t.id] ? blockSpan(t.id, this.world.getMeta(t.x, t.y, t.z)) : [0, 1];
-    return { x: t.x, y: t.y, z: t.z, y0, y1 };
+    const boxes = this.world.shapeAt(t.x, t.y, t.z);
+    if (!boxes) return { x: t.x, y: t.y, z: t.z, b: [0, 0, 0, 1, 1, 1] };
+    const b = [1, 1, 1, 0, 0, 0];
+    for (const q of boxes) for (let a = 0; a < 3; a++) { b[a] = Math.min(b[a], q[a]); b[a + 3] = Math.max(b[a + 3], q[a + 3]); }
+    return { x: t.x, y: t.y, z: t.z, b };
   }
 
   render(dt) {

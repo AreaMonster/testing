@@ -1,6 +1,9 @@
 // Block and item registry plus fast lookup tables used by the hot paths.
 
-export const R = { NONE: 0, CUBE: 1, CUTOUT: 2, CROSS: 3, LIQUID: 4, TORCH: 5, SLAB: 6, LADDER: 7, LANTERN: 8, GLASS: 9, CROP: 10 };
+export const R = {
+  NONE: 0, CUBE: 1, CUTOUT: 2, CROSS: 3, LIQUID: 4, TORCH: 5, SLAB: 6, LADDER: 7, LANTERN: 8, GLASS: 9, CROP: 10,
+  SHAPED: 11, CAMPFIRE: 12, SEAPLANT: 13, DRIP: 14,
+};
 // Tint kinds: 1 grass (top face only), 2 grass (all faces), 3 oak foliage, 4 birch, 5 spruce
 export const TINT_KIND = { GRASS_TOP: 1, GRASS_ALL: 2, OAK: 3, BIRCH: 4, SPRUCE: 5 };
 
@@ -160,6 +163,47 @@ blk('COBWEB', 'Cobweb', { tex: 'cobweb', render: R.CROSS, solid: false, opaque: 
 blk('PATH', 'Dirt Path', { tex: { top: 'path_top', side: 'path_side', bottom: 'dirt' }, hardness: 0.6, tool: 'shovel', sound: 'gravel', drop: 'DIRT' });
 blk('FENCE_POST', 'Wooden Post', { tex: { top: 'log_oak_top', side: 'log_oak' }, hardness: 2, tool: 'axe', sound: 'wood', log: true, fuel: 15 });
 for (const k of ['LOG', 'BIRCH_LOG', 'SPRUCE_LOG', 'ACACIA_LOG']) BLOCKS[B[k]].log = true;
+// ---- Added in the shaders & content update ----
+// Shaped blocks: stairs (meta: facing 0-3, +4 upside down), doors (facing 0-3, +4 open, +8 upper half),
+// fences and panes (connect to neighbours), campfire. Facing: 0 +x, 1 -x, 2 +z, 3 -z.
+const stairs = (key, name, tex, extra = {}) => blk(key, name, Object.assign({ tex, render: R.SHAPED, opaque: false, shape: 'stairs', hardness: 2, tool: 'pickaxe', tier: 1 }, extra));
+const woodStairs = { tool: 'axe', tier: 0, sound: 'wood', fuel: 15 };
+stairs('OAK_STAIRS', 'Oak Stairs', 'planks_oak', woodStairs);
+stairs('SPRUCE_STAIRS', 'Spruce Stairs', 'planks_spruce', woodStairs);
+stairs('COBBLE_STAIRS', 'Cobblestone Stairs', 'cobblestone');
+stairs('STONE_BRICK_STAIRS', 'Stone Brick Stairs', 'stone_bricks', { hardness: 1.5 });
+stairs('BRICK_STAIRS', 'Brick Stairs', 'bricks');
+stairs('SANDSTONE_STAIRS', 'Sandstone Stairs', { top: 'sandstone_top', side: 'sandstone_side', bottom: 'sandstone_top' }, { hardness: 0.8 });
+blk('OAK_DOOR', 'Oak Door', { tex: 'door_oak_bottom', top: 'door_oak_top', icon: 'door_oak_item', render: R.SHAPED, opaque: false, shape: 'door', hardness: 3, tool: 'axe', sound: 'wood', interact: 'door', support: 'door', fuel: 10 });
+blk('SPRUCE_DOOR', 'Spruce Door', { tex: 'door_spruce_bottom', top: 'door_spruce_top', icon: 'door_spruce_item', render: R.SHAPED, opaque: false, shape: 'door', hardness: 3, tool: 'axe', sound: 'wood', interact: 'door', support: 'door', fuel: 10 });
+blk('OAK_FENCE', 'Oak Fence', { tex: 'planks_oak', icon: 'fence_oak_item', render: R.SHAPED, opaque: false, shape: 'fence', hardness: 2, tool: 'axe', sound: 'wood', fuel: 15 });
+blk('SPRUCE_FENCE', 'Spruce Fence', { tex: 'planks_spruce', icon: 'fence_spruce_item', render: R.SHAPED, opaque: false, shape: 'fence', hardness: 2, tool: 'axe', sound: 'wood', fuel: 15 });
+blk('GLASS_PANE', 'Glass Pane', { tex: 'glass', icon: 'glass', render: R.SHAPED, opaque: false, shape: 'pane', hardness: 0.3, sound: 'glass', drop: null });
+blk('CAMPFIRE', 'Campfire', { tex: { top: 'campfire_log_top', side: 'campfire_log' }, icon: 'campfire_item', render: R.CAMPFIRE, opaque: false, shape: 'campfire', light: 15, hardness: 2, tool: 'axe', sound: 'wood', drop: 'COAL' });
+for (const [k, n] of WOOL_COLORS) blk(`CONCRETE_${k}`, `${n} Concrete`, { tex: `concrete_${k.toLowerCase()}`, hardness: 1.8, tool: 'pickaxe', tier: 1 });
+blk('PACKED_ICE', 'Packed Ice', { tex: 'packed_ice', hardness: 0.5, tool: 'pickaxe', sound: 'glass', slip: 0.98, drop: null });
+BLOCKS[B.ICE].slip = 0.98;
+blk('DARK_OAK_LOG', 'Dark Oak Log', { tex: { top: 'log_dark_oak_top', side: 'log_dark_oak' }, hardness: 2, tool: 'axe', sound: 'wood', fuel: 15, log: true });
+blk('DARK_OAK_LEAVES', 'Dark Oak Leaves', { tex: 'leaves_dark_oak', render: R.CUTOUT, opaque: false, filter: 1, hardness: 0.2, sound: 'grass', tint: 3, drop: 'leaves', leaf: true });
+blk('DARK_OAK_PLANKS', 'Dark Oak Planks', { tex: 'planks_dark_oak', hardness: 2, tool: 'axe', sound: 'wood', fuel: 15 });
+blk('MUSHROOM_STEM', 'Mushroom Stem', { tex: 'mushroom_stem', hardness: 0.2, tool: 'axe', sound: 'wood', drop: null });
+blk('RED_MUSHROOM_BLOCK', 'Red Mushroom Block', { tex: 'mushroom_block_red', hardness: 0.2, tool: 'axe', sound: 'wood', drop: 'RED_MUSHROOM' });
+blk('BROWN_MUSHROOM_BLOCK', 'Brown Mushroom Block', { tex: 'mushroom_block_brown', hardness: 0.2, tool: 'axe', sound: 'wood', drop: 'BROWN_MUSHROOM' });
+export const CORAL_COLORS = [
+  ['BLUE', 'Tube', [52, 92, 220]], ['PINK', 'Brain', [214, 96, 160]], ['PURPLE', 'Bubble', [160, 40, 168]],
+  ['RED', 'Fire', [200, 46, 52]], ['YELLOW', 'Horn', [214, 196, 62]],
+];
+for (const [k, n] of CORAL_COLORS) blk(`CORAL_${k}`, `${n} Coral Block`, { tex: `coral_${k.toLowerCase()}`, hardness: 1.5, tool: 'pickaxe', tier: 1, sound: 'stone' });
+const seaPlant = (tex, extra = {}) => Object.assign({ tex, render: R.SEAPLANT, solid: false, opaque: false, filter: 1, hardness: 0, sound: 'grass', support: 'sea', liquid: 1, water: true, creative: true }, extra);
+for (const [k, n] of CORAL_COLORS) blk(`CORAL_FAN_${k}`, `${n} Coral`, seaPlant(`coral_fan_${k.toLowerCase()}`, { drop: null }));
+blk('SEAGRASS', 'Seagrass', seaPlant('seagrass', { drop: null, tint: 2, replaceable: true }));
+blk('KELP', 'Kelp', seaPlant('kelp', { top: 'kelp_top', support: 'kelp' }));
+blk('DRIPSTONE_BLOCK', 'Dripstone Block', { tex: 'dripstone_block', hardness: 1.5, tool: 'pickaxe', tier: 1 });
+blk('POINTED_DRIPSTONE', 'Pointed Dripstone', { tex: 'pointed_dripstone', icon: 'pointed_dripstone', render: R.DRIP, solid: false, opaque: false, hardness: 1.5, tool: 'pickaxe', sound: 'stone', support: 'drip' });
+blk('MUD', 'Mud', { tex: 'mud', hardness: 0.5, tool: 'shovel', sound: 'gravel' });
+blk('MUD_BRICKS', 'Mud Bricks', { tex: 'mud_bricks', hardness: 1.5, tool: 'pickaxe', tier: 1 });
+blk('PRISM_LAMP', 'Prism Lamp', { tex: 'prism_lamp', light: 15, hardness: 0.3, sound: 'glass' });
+blk('BLUE_ICE', 'Blue Ice', { tex: 'blue_ice', hardness: 2.8, tool: 'pickaxe', sound: 'glass', slip: 0.989, drop: null });
 
 // ---- Items (ids from 256) ----
 let nextItem = 256;
@@ -219,6 +263,21 @@ itm('EGG', 'Egg', { maxStack: 16 });
 for (const [m, n, tier, speed, dur] of TOOL_MATS) {
   itm(`${m}_HOE`, `${n} Hoe`, { tex: `${m.toLowerCase()}_hoe`, maxStack: 1, tool: { type: 'hoe', tier, speed, dmg: 1, dur }, fuel: tier === 1 ? 10 : 0 });
 }
+// ---- Added in the shaders & content update ----
+// Armour: slot 0 head, 1 chest, 2 legs, 3 feet; points out of 20 reduce damage by 4% each.
+export const ARMOR_MATS = [
+  ['LEATHER', 'Leather', [1, 3, 2, 1], 80], ['COPPER', 'Copper', [2, 4, 3, 1], 140],
+  ['IRON', 'Iron', [2, 6, 5, 2], 240], ['DIAMOND', 'Diamond', [3, 8, 6, 3], 520],
+];
+export const ARMOR_PIECES = [['HELMET', 'Helmet'], ['CHESTPLATE', 'Chestplate'], ['LEGGINGS', 'Leggings'], ['BOOTS', 'Boots']];
+for (const [m, n, pts, dur] of ARMOR_MATS) ARMOR_PIECES.forEach(([k, kn], slot) => itm(`${m}_${k}`, `${n} ${kn}`, {
+  tex: `${m.toLowerCase()}_${k.toLowerCase()}`, maxStack: 1, armor: { slot, points: pts[slot], dur: Math.round(dur * [0.7, 1, 0.95, 0.85][slot]) },
+}));
+itm('LEATHER', 'Leather');
+itm('SHEARS', 'Shears', { maxStack: 1, tool: { type: 'shears', tier: 0, speed: 5, dmg: 1, dur: 238 } });
+itm('BONE_MEAL', 'Bone Meal');
+itm('RAW_FISH', 'Raw Trout', { food: 2 });
+itm('COOKED_FISH', 'Cooked Trout', { food: 5 });
 
 // Resolve string drops to ids.
 for (const d of BLOCKS) {
@@ -228,6 +287,7 @@ for (const d of BLOCKS) {
 for (const id in ITEMS) if (typeof ITEMS[id].places === 'string') ITEMS[id].places = B[ITEMS[id].places];
 
 // ---- Lookup tables ----
+const SHAPE_IDS = { slab: 1, bed: 2, stairs: 3, door: 4, fence: 5, pane: 6, campfire: 7 };
 export const OPAQUE = new Uint8Array(256);
 export const SOLID = new Uint8Array(256);
 export const FILTER = new Uint8Array(256);
@@ -238,7 +298,8 @@ export const CULLSAME = new Uint8Array(256);
 export const LIQUID = new Uint8Array(256);
 export const LEAF = new Uint8Array(256);
 export const LOG = new Uint8Array(256);
-export const SHAPE = new Uint8Array(256); // 0 full, 1 slab (meta 0 bottom / 1 top), 2 bedroll
+export const SHAPE = new Uint8Array(256); // 0 full, 1 slab, 2 bedroll, 3 stairs, 4 door, 5 fence, 6 pane, 7 campfire
+export const WATERLOGGED = new Uint8Array(256);
 export const CLIMB = new Uint8Array(256);
 export const TARGET = new Uint8Array(256);
 export const REPLACEABLE = new Uint8Array(256);
@@ -253,9 +314,10 @@ for (const d of BLOCKS) {
   LIQUID[d.id] = d.liquid;
   LEAF[d.id] = d.leaf ? 1 : 0;
   LOG[d.id] = d.log ? 1 : 0;
-  SHAPE[d.id] = d.shape === 'slab' ? 1 : d.shape === 'bed' ? 2 : 0;
+  SHAPE[d.id] = SHAPE_IDS[d.shape] || 0;
+  WATERLOGGED[d.id] = d.water ? 1 : 0;
   CLIMB[d.id] = d.climb ? 1 : 0;
-  TARGET[d.id] = d.render !== R.NONE && !d.liquid ? 1 : 0;
+  TARGET[d.id] = d.render !== R.NONE && (!d.liquid || d.water) ? 1 : 0;
   REPLACEABLE[d.id] = d.replaceable ? 1 : 0;
 }
 
@@ -282,6 +344,8 @@ export function bindTextures(LAYERS) {
     const f = [side, side, top, bottom, side, side];
     for (let i = 0; i < 6; i++) TEXL[d.id * 6 + i] = f[i];
     FRONTL[d.id] = t.front ? L(t.front) : side;
+    if (d.top) d.topLayer = L(d.top);
+    if (d.icon) d.iconLayer = L(d.icon);
   }
   for (const id in ITEMS) ITEMS[id].layer = L(ITEMS[id].tex);
 }
@@ -317,6 +381,7 @@ export function breakTime(blockId, stack) {
   let speed = 1;
   if (t && t.type === d.tool) speed = t.speed;
   if (t && t.type === 'sword' && d.leaf) speed = 1.5;
+  if (t && t.type === 'shears' && (d.leaf || d.web || d.sound === 'wool')) speed = d.web ? 15 : 5;
   return (d.hardness * (canHarvest(blockId, stack) ? 1.5 : 5)) / speed;
 }
 
@@ -342,5 +407,61 @@ export function blockSpan(id, meta) {
   const sh = SHAPE[id];
   if (sh === 1) return meta === 1 ? [0.5, 1] : [0, 0.5];
   if (sh === 2) return [0, 0.375];
+  if (sh === 7) return [0, 0.4375];
   return [0, 1];
+}
+
+// Fences connect to fences and full blocks; panes to panes, glass and full blocks.
+export function connects(id, other) {
+  const sh = SHAPE[id];
+  if (sh === 5) return SHAPE[other] === 5 || (OPAQUE[other] && SOLID[other]);
+  if (sh === 6) return SHAPE[other] === 6 || (OPAQUE[other] && SOLID[other]) || other === B.GLASS || RENDER[other] === R.GLASS;
+  return false;
+}
+
+const FULL_BOX = [[0, 0, 0, 1, 1, 1]];
+// Boxes (block-local [x0,y0,z0,x1,y1,z1]) for a block. conn: bits +x 1, -x 2, +z 4, -z 8.
+// `collide` gives the physics shape (fences are 1.5 tall), otherwise the visual one.
+export function shapeBoxes(id, meta, conn = 0, collide = false) {
+  switch (SHAPE[id]) {
+    case 0: return FULL_BOX;
+    case 1: case 2: case 7: { const [y0, y1] = blockSpan(id, meta); return [[0, y0, 0, 1, y1, 1]]; }
+    case 3: {
+      const up = meta & 4, f = meta & 3;
+      const slab = up ? [0, 0.5, 0, 1, 1, 1] : [0, 0, 0, 1, 0.5, 1];
+      const y0 = up ? 0 : 0.5, y1 = up ? 0.5 : 1;
+      const step = f === 0 ? [0.5, y0, 0, 1, y1, 1] : f === 1 ? [0, y0, 0, 0.5, y1, 1] : f === 2 ? [0, y0, 0.5, 1, y1, 1] : [0, y0, 0, 1, y1, 0.5];
+      return [slab, step];
+    }
+    case 4: {
+      const t = 3 / 16, open = meta & 4;
+      // Closed: panel on the side facing back toward the placer; open: swung against the hinge side.
+      const side = open ? [2, 1, 3, 0][meta & 3] : [1, 0, 3, 2][meta & 3];
+      return [side === 0 ? [1 - t, 0, 0, 1, 1, 1] : side === 1 ? [0, 0, 0, t, 1, 1] : side === 2 ? [0, 0, 1 - t, 1, 1, 1] : [0, 0, 0, 1, 1, t]];
+    }
+    case 5: {
+      const top = collide ? 1.5 : 1;
+      const out = [[6 / 16, 0, 6 / 16, 10 / 16, top, 10 / 16]];
+      for (const bit of [1, 2, 4, 8]) {
+        if (!(conn & bit)) continue;
+        if (collide) out.push(armBox(bit, 6 / 16, 10 / 16, 0, top));
+        else out.push(armBox(bit, 7 / 16, 9 / 16, 6 / 16, 9 / 16), armBox(bit, 7 / 16, 9 / 16, 12 / 16, 15 / 16));
+      }
+      return out;
+    }
+    case 6: {
+      const c = conn || 15;
+      const out = [[7 / 16, 0, 7 / 16, 9 / 16, 1, 9 / 16]];
+      for (const bit of [1, 2, 4, 8]) if (c & bit) out.push(armBox(bit, 7 / 16, 9 / 16, 0, 1));
+      return out;
+    }
+  }
+  return FULL_BOX;
+}
+// Box from the block centre toward one side; w0..w1 is the thickness, y0..y1 the height.
+function armBox(bit, w0, w1, y0, y1) {
+  if (bit === 1) return [0.5, y0, w0, 1, y1, w1];
+  if (bit === 2) return [0, y0, w0, 0.5, y1, w1];
+  if (bit === 4) return [w0, y0, 0.5, w1, y1, 1];
+  return [w0, y0, 0, w1, y1, 0.5];
 }

@@ -195,6 +195,24 @@ export class Audio {
       case 'fizz': this.burst(dest, { f: 4000, q: 0.3, dur: 0.6, type: 'highpass' }, 0.2); break;
       case 'level': [0, 4, 7].forEach((s, i) => this.tone(dest, { f: 523 * 2 ** (s / 12), dur: 0.35, vol: 0.12, delay: i * 0.09 })); break;
       case 'door': this.tone(dest, { f: 220, f2: 140, dur: 0.18, type: 'triangle', vol: 0.2 }); break;
+      case 'hiss': this.burst(dest, { f: 5000, q: 0.4, dur: 1.4, type: 'highpass' }, 0.22 * vol / 0.5); break;
+      case 'boom': {
+        this.burst(dest, { f: 1800, q: 0.4, dur: 0.35, type: 'lowpass' }, 0.9);
+        const ctx = this.ctx, t = ctx.currentTime;
+        const src = ctx.createBufferSource();
+        src.buffer = this.brown;
+        src.loop = true;
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.setValueAtTime(900, t);
+        lp.frequency.exponentialRampToValueAtTime(60, t + 1.6);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(1.2 * vol / 0.5, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 2);
+        src.connect(lp); lp.connect(g); g.connect(dest);
+        src.start(t); src.stop(t + 2.1);
+        break;
+      }
     }
   }
 
@@ -257,6 +275,14 @@ export class Audio {
         voice(88 * k, 66 * k, hurt ? 0.3 : 0.9, [[380, 2, 1], [760, 3, 0.4]], 4, 0.26);
         this.burst(dest, { f: 450, q: 0.6, dur: 0.6, type: 'lowpass' }, 0.08);
         break;
+      case 'wolf':
+        if (hurt) voice(520, 380, 0.25, [[1200, 3, 1]], 0, 0.16);
+        else { voice(260, 200, 0.12, [[900, 2, 1], [1800, 3, 0.4]], 0, 0.2); voice(260, 190, 0.12, [[900, 2, 1]], 0, 0.0); }
+        break;
+      case 'bear': voice(70 * k, 52 * k, hurt ? 0.4 : 1.1, [[260, 1.5, 1], [600, 2, 0.5]], 9, 0.28); break;
+      case 'bat': voice(2400 * k, 3200 * k, 0.07, [[3000, 4, 1]], 0, 0.06); break;
+      case 'beetle': for (let i = 0; i < 4; i++) this.burst(dest, { f: 3000, q: 3, dur: 0.03, type: 'bandpass' }, 0.12, 1, i * 0.05); break;
+      case 'boomshroom': voice(140 * k, 100 * k, 0.4, [[500, 2, 1]], 12, 0.12); break;
     }
   }
 

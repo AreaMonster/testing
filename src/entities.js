@@ -1,6 +1,6 @@
 // Dropped items, falling blocks and mobs (original box-model creatures).
 import { moveEntity, entityBox, boxTouches } from './physics.js';
-import { B, I, BLOCKS, LIQUID, REPLACEABLE, itemDef } from './blocks.js';
+import { B, I, BLOCKS, LIQUID, REPLACEABLE, SOLID, itemDef } from './blocks.js';
 import { boxMesh } from './mesher.js';
 import { LAYERS } from './textures.js';
 import { Mat4 } from './math.js';
@@ -177,6 +177,21 @@ const quadLegs = (dx, dzF, dzB, y, h, layer) => [
   ['legFR', dx, -dzF], ['legFL', -dx, -dzF], ['legBR', dx, dzB], ['legBL', -dx, dzB],
 ].map(([name, x, z]) => ({ name, pivot: [x, y, z], box: [-2, -h, -2, 4, h, 4], faces: all(layer) }));
 
+function wolfParts(tame) {
+  const parts = [
+    { name: 'body', pivot: [0, 8, 0], box: [-3, -3, -5, 6, 6, 10], faces: F('wf_fur', 'wf_fur', 'wf_fur', 'wf_belly', 'wf_fur', 'wf_fur') },
+    { name: 'mane', parent: 'body', pivot: [0, 0, 0], box: [-4, -3.5, -6, 8, 7.5, 4], faces: all('wf_fur') },
+    { name: 'head', parent: 'body', pivot: [0, 2, -6], box: [-3, -3, -4, 6, 6, 4], faces: F('wf_fur', 'wf_fur', 'wf_fur', 'wf_fur', 'wf_fur', 'wf_face') },
+    { name: 'snout', parent: 'head', pivot: [0, 0, 0], box: [-1.5, -3, -7, 3, 3, 3], faces: all('wf_snout') },
+    { name: 'earR', parent: 'head', pivot: [0, 0, 0], box: [1, 3, -2, 2, 2, 1], faces: all('wf_fur') },
+    { name: 'earL', parent: 'head', pivot: [0, 0, 0], box: [-3, 3, -2, 2, 2, 1], faces: all('wf_fur') },
+    { name: 'tail', parent: 'body', pivot: [0, 2, 5], box: [-1, -1, 0, 2, 2, 8], faces: all('wf_fur'), rot: [0.75, 0, 0] },
+    ...quadLegs(1.8, 3.5, 3.5, 8, 8, 'wf_fur'),
+  ];
+  if (tame) parts.push({ name: 'collar', parent: 'body', pivot: [0, 0, 0], box: [-4.3, -3.8, -6.6, 8.6, 8.1, 1.4], faces: all('wf_collar') });
+  return parts;
+}
+
 export const MOB_TYPES = {
   pig: {
     name: 'Pig', w: 0.85, h: 0.9, health: 10, speed: 1.4, scale: 1 / 16, quad: true,
@@ -313,6 +328,78 @@ export const MOB_TYPES = {
     ],
     drops: () => [],
   },
+  wolf: {
+    name: 'Wolf', w: 0.6, h: 0.85, health: 8, speed: 2.6, scale: 1 / 16, quad: true, neutral: true, damage: 3, pack: true,
+    parts: () => wolfParts(false),
+    drops: () => [],
+  },
+  wolf_tame: { name: 'Wolf', w: 0.6, h: 0.85, scale: 1 / 16, parts: () => wolfParts(true) },
+  sheep_bare: {
+    name: 'Sheep', w: 0.9, h: 1.3, scale: 1 / 16,
+    parts: () => [
+      { name: 'body', pivot: [0, 12, 0], box: [-4, 1, -7, 8, 7, 14], faces: all('sheep_skin') },
+      { name: 'head', parent: 'body', pivot: [0, 7, -8], box: [-3, -3, -6, 6, 6, 6], faces: F('sheep_skin', 'sheep_skin', 'sheep_skin', 'sheep_skin', 'sheep_skin', 'sheep_face') },
+      ...quadLegs(3, 5, 5, 12, 12, 'sheep_leg'),
+    ],
+  },
+  bear: {
+    name: 'Bear', w: 1.3, h: 1.4, health: 30, speed: 1.9, scale: 1 / 16, quad: true, neutral: true, damage: 6,
+    parts: () => [
+      { name: 'body', pivot: [0, 10, 0], box: [-7, 0, -11, 14, 12, 22], faces: all('br_fur') },
+      { name: 'head', parent: 'body', pivot: [0, 8, -11], box: [-5, -4, -7, 10, 9, 7], faces: F('br_fur', 'br_fur', 'br_fur', 'br_fur', 'br_fur', 'br_face') },
+      { name: 'muzzle', parent: 'head', pivot: [0, 0, 0], box: [-2.5, -4, -10, 5, 4, 3], faces: all('br_muzzle') },
+      { name: 'earR', parent: 'head', pivot: [0, 0, 0], box: [3, 5, -4, 2, 2, 1], faces: all('br_fur') },
+      { name: 'earL', parent: 'head', pivot: [0, 0, 0], box: [-5, 5, -4, 2, 2, 1], faces: all('br_fur') },
+      ...[['legFR', 4.5, -7], ['legFL', -4.5, -7], ['legBR', 4.5, 7], ['legBL', -4.5, 7]].map(([name, x, z]) => ({ name, pivot: [x, 10, z], box: [-2.5, -10, -2.5, 5, 10, 5], faces: all('br_fur') })),
+    ],
+    drops: () => [[I.LEATHER, Math.floor(rand() * 3)], [I.RAW_FISH, Math.floor(rand() * 2)]],
+  },
+  bat: {
+    name: 'Bat', w: 0.5, h: 0.6, health: 6, speed: 3, scale: 0.045, flies: true,
+    parts: () => [
+      { name: 'body', pivot: [0, 6, 0], box: [-2, -4, -1.5, 4, 6, 3], faces: all('bt_body') },
+      { name: 'head', parent: 'body', pivot: [0, 2, 0], box: [-2, 0, -2, 4, 3.5, 3], faces: F('bt_body', 'bt_body', 'bt_body', 'bt_body', 'bt_body', 'bt_face') },
+      { name: 'earR', parent: 'head', pivot: [0, 0, 0], box: [0.8, 3.5, -0.5, 1, 2, 1], faces: all('bt_body') },
+      { name: 'earL', parent: 'head', pivot: [0, 0, 0], box: [-1.8, 3.5, -0.5, 1, 2, 1], faces: all('bt_body') },
+      { name: 'wingR', parent: 'body', pivot: [2, 1, 0], box: [0, -5, -0.25, 9, 6, 0.5], faces: all('bt_wing') },
+      { name: 'wingL', parent: 'body', pivot: [-2, 1, 0], box: [-9, -5, -0.25, 9, 6, 0.5], faces: all('bt_wing') },
+    ],
+    drops: () => [],
+  },
+  trout: {
+    name: 'Trout', w: 0.5, h: 0.4, health: 3, speed: 2.2, scale: 1 / 16, swims: true,
+    parts: () => [
+      { name: 'body', pivot: [0, 3, 0], box: [-1, -2.5, -4, 2, 5, 8], faces: F('tr_side', 'tr_side', 'tr_top', 'tr_side', 'tr_side', 'tr_face') },
+      { name: 'tail', parent: 'body', pivot: [0, 0, 4], box: [-0.25, -2.5, 0, 0.5, 5, 4], faces: all('tr_fin') },
+      { name: 'fin', parent: 'body', pivot: [0, 0, 0], box: [-0.25, 2.5, -1.5, 0.5, 1.5, 3], faces: all('tr_fin') },
+    ],
+    drops: () => [[I.RAW_FISH, 1], ...(rand() < 0.08 ? [[I.BONE_MEAL, 1]] : [])],
+  },
+  beetle: {
+    name: 'Cave Beetle', w: 0.8, h: 0.5, health: 8, speed: 3.1, scale: 1 / 16, hostile: true, damage: 2, cave: true,
+    parts: () => [
+      { name: 'body', pivot: [0, 3, 0], box: [-4, 0, -5, 8, 4, 10], faces: F('bl_shell', 'bl_shell', 'bl_shell', 'bl_body', 'bl_shell', 'bl_body') },
+      { name: 'head', parent: 'body', pivot: [0, 1.5, -5], box: [-2.5, -1.5, -3, 5, 3, 3], faces: F('bl_body', 'bl_body', 'bl_body', 'bl_body', 'bl_body', 'bl_face') },
+      { name: 'jawR', parent: 'head', pivot: [0, 0, 0], box: [1, -1, -5, 1, 1, 2], faces: all('bl_leg') },
+      { name: 'jawL', parent: 'head', pivot: [0, 0, 0], box: [-2, -1, -5, 1, 1, 2], faces: all('bl_leg') },
+      ...[0, 1, 2, 4, 5, 6].map((k) => {
+        const side = k < 4 ? 1 : -1, j = k % 4;
+        return { name: `sleg${k}`, sleg: k, parent: 'body', pivot: [side * 3.5, 0.5, -3 + j * 3], box: side > 0 ? [0, -0.5, -0.5, 7, 1, 1] : [-7, -0.5, -0.5, 7, 1, 1], faces: all('bl_leg') };
+      }),
+    ],
+    drops: () => (rand() < 0.5 ? [[I.BONE_MEAL, 1]] : []),
+  },
+  boomshroom: {
+    name: 'Boomshroom', w: 0.7, h: 1.45, health: 16, speed: 2, scale: 1 / 16, hostile: true, fuse: true,
+    parts: () => [
+      { name: 'body', pivot: [0, 6, 0], box: [-3, 0, -3, 6, 10, 6], faces: F('bs_stem', 'bs_stem', 'bs_stem', 'bs_stem', 'bs_stem', 'bs_face') },
+      { name: 'cap', parent: 'body', pivot: [0, 10, 0], box: [-6, 0, -6, 12, 5, 12], faces: F('bs_cap', 'bs_cap', 'bs_cap', 'bs_gill', 'bs_cap', 'bs_cap') },
+      { name: 'capTop', parent: 'cap', pivot: [0, 0, 0], box: [-4, 5, -4, 8, 2, 8], faces: all('bs_cap') },
+      { name: 'legR', pivot: [1.5, 6, 0], box: [-1, -6, -1, 2, 6, 2], faces: all('bs_stem') },
+      { name: 'legL', pivot: [-1.5, 6, 0], box: [-1, -6, -1, 2, 6, 2], faces: all('bs_stem') },
+    ],
+    drops: () => [[B.RED_MUSHROOM, Math.floor(rand() * 3)], [B.BROWN_MUSHROOM, Math.floor(rand() * 2)]],
+  },
   player: {
     name: 'You', w: 0.6, h: 1.8, scale: 0.056,
     parts: () => humanoid({
@@ -352,7 +439,9 @@ export function poseDraws(g, cam, type, e, pose) {
   const attack = Math.sin(Math.sqrt(s) * Math.PI);
   const root = matFor('root').identity().translate(e.x - cam.x, e.y - cam.y, e.z - cam.z).rotateY(pose.bodyYaw);
   if (pose.tilt) root.rotateZ(pose.tilt);
-  root.scale(def.scale);
+  if (pose.pitch) root.rotateX(pose.pitch);
+  root.scale(def.scale * (1 + (pose.swell || 0) * 0.18), def.scale * (1 + (pose.swell || 0) * 0.08), def.scale * (1 + (pose.swell || 0) * 0.18));
+  if (pose.sit) root.translate(0, -3, 0);
   if (pose.sneak) root.translate(0, -2.5, 1.5);
   for (const part of parts) {
     const m = matFor(part.name).copy(part.parent ? matFor(part.parent) : root);
@@ -372,7 +461,10 @@ export function poseDraws(g, cam, type, e, pose) {
         break;
       case 'wingR': m.rotateZ(-(pose.flap || 0)); break;
       case 'wingL': m.rotateZ(pose.flap || 0); break;
+      case 'tail': if (pose.wag !== undefined) m.rotateY(Math.sin(pose.wag) * 0.6); break;
     }
+    if (pose.sit && (part.name === 'legBR' || part.name === 'legBL')) m.translate(0, -2, 2).rotateX(1.35);
+    if (pose.sit && part.name === 'body') m.rotateX(0.45);
     if (part.sleg !== undefined) {
       const k = part.sleg, side = k < 4 ? 1 : -1, j = k % 4;
       m.rotateY(side * (0.75 - j * 0.5) + Math.sin(pose.phase * 1.7 + j * 1.6 + (side > 0 ? 0 : Math.PI)) * 0.4 * pose.amount);
@@ -434,10 +526,40 @@ export class Mob extends Entity {
     this.hurt = Math.max(0, this.hurt - dt);
     this.attackCd -= dt;
     this.timer -= dt;
+    if (this.def.flies) { this.updateFlyer(dt, g); return; }
+    if (this.def.swims) { this.updateSwimmer(dt, g); return; }
+    if (this.sheared && (this.regrowT -= dt) <= 0) this.sheared = false;
+    this.angry = Math.max(0, (this.angry || 0) - dt);
     let moving = false, speed = this.def.speed;
     const dxp = p.x - this.x, dzp = p.z - this.z;
     const dist = Math.hypot(dxp, p.y - this.y, dzp);
-    if (this.def.ranged && p.alive && p.mode === 'survival' && dist < 22) {
+    const hostile = this.def.hostile || this.angry > 0;
+    if (this.owner) {
+      // Tamed wolf: sit, defend the player, or follow at heel.
+      const t = this.target && !this.target.dead && this.target.health > 0 ? this.target : null;
+      if (this.sitting) this.target = null;
+      else if (t && Math.hypot(t.x - this.x, t.z - this.z) < 20) {
+        const tx = t.x - this.x, tz = t.z - this.z, td = Math.hypot(tx, tz);
+        this.targetYaw = Math.atan2(-tx, -tz);
+        moving = td > 1.1;
+        speed *= 1.35;
+        if (td < 1.8 && Math.abs(t.y - this.y) < 1.6 && this.attackCd <= 0) {
+          t.damage(4, this, g);
+          this.attackCd = 0.8;
+          this.swing = 0.01;
+        }
+      } else {
+        this.target = null;
+        if (dist > 24 && p.onGround) {
+          this.x = p.x + (rand() - 0.5) * 2; this.y = p.y + 0.2; this.z = p.z + (rand() - 0.5) * 2;
+          this.vx = this.vy = this.vz = 0;
+        } else if (dist > 3.5) {
+          this.targetYaw = Math.atan2(-dxp, -dzp);
+          moving = true;
+          speed *= dist > 9 ? 1.6 : 1.1;
+        }
+      }
+    } else if (this.def.ranged && p.alive && p.mode === 'survival' && dist < 22) {
       // Keep a firing distance and shoot when the player is in sight.
       this.targetYaw = Math.atan2(-dxp, -dzp);
       if (dist > 11) moving = true;
@@ -451,15 +573,25 @@ export class Mob extends Entity {
         g.entities.push(new Arrow(this.x, this.y + 1.5, this.z, (dxp / flat) * Math.cos(aim) * sp, Math.sin(aim) * sp, (dzp / flat) * Math.cos(aim) * sp, this, 3));
         g.audio.play('swing', { vol: 0.6 });
       }
-    } else if (this.def.hostile && p.alive && p.mode === 'survival' && dist < 20) {
+    } else if (hostile && p.alive && p.mode === 'survival' && dist < 20 && (!this.def.cave || dist < 12)) {
       this.targetYaw = Math.atan2(-dxp, -dzp);
       moving = dist > 0.8;
+      if (this.def.fuse) {
+        // Boomshroom: hiss when close, burst unless the player backs off.
+        const near = dist < 3 && g.canSee(this.x, this.y + 1, this.z, p.x, p.y + 1, p.z);
+        if (near || (this.fuse > 0 && dist < 7)) {
+          if (!this.fuse) g.audio.play('hiss', { vol: 0.6 });
+          this.fuse = (this.fuse || 0) + dt;
+          moving = false;
+          if (this.fuse >= 1.5) { this.dead = true; g.explode(this.x, this.y + 0.6, this.z, 3, this); return; }
+        } else this.fuse = Math.max(0, (this.fuse || 0) - dt * 2);
+      }
       if (this.def.leaps && dist < 5 && dist > 1.4 && this.onGround && (this.leapT -= dt) <= 0) {
         this.leapT = 1.5 + rand();
         this.vy = 6.5;
         this.vx = (dxp / dist) * 7; this.vz = (dzp / dist) * 7;
       }
-      if (dist < (this.def.leaps ? 1.8 : 1.5) && Math.abs(p.y - this.y) < 1.6 && this.attackCd <= 0) {
+      if (!this.def.fuse && dist < (this.def.leaps ? 1.8 : 1.5) + this.w * 0.3 && Math.abs(p.y - this.y) < 1.6 && this.attackCd <= 0) {
         g.damagePlayer(this.def.damage, this);
         this.attackCd = 1;
         this.swing = 0.01;
@@ -537,7 +669,12 @@ export class Mob extends Entity {
     if (this.health <= 0 || this.hurt > 0.25) return false;
     this.health -= n;
     this.hurt = 0.45;
-    if (!this.def.hostile) { this.flee = 5; this.timer = 0; }
+    if (src && src === g.player && this.def.neutral && !this.owner) {
+      // Neutral animals fight back; wolves call their pack.
+      this.angry = 30;
+      if (this.def.pack) for (const e of g.entities) if (e.type === this.type && !e.owner && Math.hypot(e.x - this.x, e.z - this.z) < 16) e.angry = 30;
+    } else if (!this.def.hostile && !this.owner) { this.flee = 5; this.timer = 0; }
+    if (src && src === g.player) g.petsAttack(this);
     if (src) {
       const dx = this.x - src.x, dz = this.z - src.z, d = Math.hypot(dx, dz) || 1;
       this.vx = (dx / d) * 7; this.vz = (dz / d) * 7; this.vy = 5.5;
@@ -547,13 +684,78 @@ export class Mob extends Entity {
   }
 
   draws(g, cam) {
-    return poseDraws(g, cam, this.type, this, {
-      bodyYaw: this.yaw, headYaw: this.headYaw, headPitch: this.headPitch || 0, phase: this.phase, amount: this.amount,
+    const type = this.owner ? 'wolf_tame' : this.sheared ? 'sheep_bare' : this.type;
+    const flash = this.fuse > 0 && Math.sin(this.age * (10 + this.fuse * 14)) > 0;
+    return poseDraws(g, cam, type, this, {
+      bodyYaw: this.yaw, headYaw: this.headYaw, headPitch: this.headPitch || 0, phase: this.phase, amount: this.sitting ? 0 : this.amount,
       tilt: this.health <= 0 ? Math.min(1, this.deathTime * 2.4) * (Math.PI / 2) : 0,
       armsForward: this.type === 'ghoul' || this.type === 'archer', swing: this.swing, flap: this.flap,
       held: this.type === 'archer' ? I.BOW : null,
-      color: this.hurt > 0 || this.health <= 0 ? [1, 0.45, 0.45, 1] : null,
+      sit: this.sitting, wag: this.owner && !this.sitting ? this.age * 9 : this.def.swims ? this.phase * 3 : undefined,
+      swell: this.fuse ? this.fuse / 1.5 : 0, pitch: this.def.swims && !this.inWater ? Math.PI / 2 : 0,
+      color: this.hurt > 0 || this.health <= 0 ? [1, 0.45, 0.45, 1] : flash ? [1.8, 1.8, 1.8, 1] : this.angry > 0 && this.type === 'wolf' ? [1.1, 0.85, 0.85, 1] : null,
     });
+  }
+
+  // Bats: erratic flight in the dark, never landing.
+  updateFlyer(dt, g) {
+    const w = g.world;
+    if (this.timer <= 0 || this.hitX || this.hitZ || this.hitCeil || this.onGround) {
+      this.timer = 0.5 + rand() * 1.3;
+      this.fx = (rand() - 0.5) * 2; this.fz = (rand() - 0.5) * 2; this.fy = (rand() - 0.35) * 1.4;
+      if (this.onGround) this.fy = 1;
+    }
+    const sp = this.def.speed, k = Math.min(1, 3 * dt);
+    this.vx += ((this.fx || 0) * sp - this.vx) * k;
+    this.vy += ((this.fy || 0) * sp * 0.6 - this.vy) * k;
+    this.vz += ((this.fz || 0) * sp - this.vz) * k;
+    moveEntity(w, this, this.vx * dt, this.vy * dt, this.vz * dt);
+    this.yaw = Math.atan2(-this.vx, -this.vz);
+    this.flap = Math.sin(this.age * 28) * 1.1;
+    this.commonTail(dt, g);
+  }
+
+  // Fish: wander inside water; flop and suffocate on land.
+  updateSwimmer(dt, g) {
+    const w = g.world;
+    const cell = (x, y, z) => LIQUID[w.getBlock(Math.floor(x), Math.floor(y), Math.floor(z))] === 1;
+    this.inWater = cell(this.x, this.y + 0.2, this.z);
+    if (this.inWater) {
+      this.dryT = 0;
+      if (this.timer <= 0 || this.hitX || this.hitZ) {
+        this.timer = 1 + rand() * 3;
+        const a = rand() * Math.PI * 2;
+        this.fx = Math.cos(a); this.fz = Math.sin(a); this.fy = (rand() - 0.5) * 0.5;
+      }
+      // Flee from a nearby player.
+      const p = g.player, dx = this.x - p.x, dz = this.z - p.z, d = Math.hypot(dx, dz);
+      if (d < 4 && p.alive) { this.fx = dx / d; this.fz = dz / d; }
+      if (!cell(this.x + (this.fx || 0) * 0.7, this.y + 0.2, this.z + (this.fz || 0) * 0.7)) { this.fx = -(this.fx || 0); this.fz = -(this.fz || 0); this.timer = 0.5; }
+      if (!cell(this.x, this.y + 0.9, this.z) && this.fy > 0) this.fy = -0.2;
+      const sp = this.def.speed * (d < 4 ? 1.8 : 1), k = Math.min(1, 2.5 * dt);
+      this.vx += ((this.fx || 0) * sp - this.vx) * k;
+      this.vy += ((this.fy || 0) - this.vy) * k;
+      this.vz += ((this.fz || 0) * sp - this.vz) * k;
+      this.yaw += angleDiff(Math.atan2(-this.vx, -this.vz), this.yaw) * Math.min(1, 6 * dt);
+    } else {
+      this.vy = Math.max(this.vy - 28 * dt, -40);
+      if (this.onGround && this.timer <= 0) { this.timer = 0.4 + rand() * 0.5; this.vy = 5; this.vx = (rand() - 0.5) * 3; this.vz = (rand() - 0.5) * 3; }
+      this.vx *= 0.96; this.vz *= 0.96;
+      this.dryT = (this.dryT || 0) + dt;
+      if (this.dryT > 4) { this.dryT = 3; this.damage(1, null, g); }
+    }
+    moveEntity(w, this, this.vx * dt, this.vy * dt, this.vz * dt);
+    this.phase += dt * (this.inWater ? 3 : 9);
+    this.commonTail(dt, g);
+  }
+
+  commonTail(dt, g) {
+    const w = g.world, p = g.player;
+    if (this.liquidAt(w, 0.3) === 2) { this.lavaT += dt; if (this.lavaT > 0.5) { this.lavaT = 0; this.damage(4, null, g); } }
+    if (this.swing > 0) { this.swing += dt * 3.2; if (this.swing >= 1) this.swing = 0; }
+    this.soundT -= dt;
+    if (this.soundT < 0) { this.soundT = 4 + rand() * 10; const d = Math.hypot(this.x - p.x, this.z - p.z); if (d < 16) g.audio.mob(this.type, this.x - p.x, this.y - p.y, this.z - p.z, p.yaw); }
+    if (this.y < -30) this.dead = true;
   }
 
   box() { return entityBox(this); }

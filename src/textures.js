@@ -1,7 +1,7 @@
 // Procedural 16x16 pixel-art textures. Every block, item, mob skin and crack
 // stage is painted here at startup into one texture array.
 import { mulberry32, hashStr } from './noise.js';
-import { WOOL_COLORS, TERRACOTTA_COLORS, GLASS_COLORS, BLOCKS, ITEMS, R, TEXL, FRONTL, itemDef, DEFAULT_GRASS, BIRCH_TINT, SPRUCE_TINT } from './blocks.js';
+import { WOOL_COLORS, TERRACOTTA_COLORS, GLASS_COLORS, CORAL_COLORS, BLOCKS, ITEMS, R, TEXL, FRONTL, itemDef, DEFAULT_GRASS, BIRCH_TINT, SPRUCE_TINT } from './blocks.js';
 
 export const LAYERS = {};
 export const layerData = [];
@@ -1345,6 +1345,272 @@ sprite('egg', (px) => {
   }
 });
 
+// ---------- shaders & content update: blocks ----------
+// Door halves: framed planks; the upper half has a four-pane window.
+const doorHalf = (base, dark, top) => (px, rnd) => {
+  paintPlanks(base)(px, rnd);
+  px.each((x, y) => {
+    const v = 0.9 + rnd() * 0.1;
+    let c = mul(base, v);
+    if (x < 2 || x > 13 || (top ? y < 2 : y > 13)) c = mul(dark, 0.95 + rnd() * 0.1);
+    else if (y % 5 === 0 || x === 7 || x === 8) c = mul(base, 0.78);
+    px.set(x, y, c);
+  });
+  if (top) {
+    for (let y = 3; y < 13; y++) for (let x = 3; x < 13; x++) {
+      if (x === 7 || x === 8 || y === 7 || y === 8) continue;
+      px.set(x, y, [0, 0, 0], 0);
+    }
+  } else {
+    px.set(11, 3, [60, 60, 66]); px.set(12, 3, [140, 140, 150]); px.set(11, 4, [200, 200, 210]);
+  }
+};
+add('door_oak_bottom', doorHalf([168, 134, 82], [110, 84, 48], false));
+add('door_oak_top', doorHalf([168, 134, 82], [110, 84, 48], true));
+add('door_spruce_bottom', doorHalf([118, 86, 52], [72, 52, 30], false));
+add('door_spruce_top', doorHalf([118, 86, 52], [72, 52, 30], true));
+const doorItem = (base, dark) => (px, rnd) => {
+  clear(px);
+  for (let y = 1; y < 15; y++) for (let x = 4; x < 12; x++) {
+    let c = mul(base, 0.9 + rnd() * 0.12);
+    if (x === 4 || x === 11 || y === 1 || y === 14 || y === 8) c = dark;
+    if (y > 2 && y < 7 && x > 5 && x < 10 && x !== 7) c = [170, 210, 236];
+    px.set(x, y, c);
+  }
+  px.set(10, 10, [220, 220, 230]);
+};
+sprite('door_oak_item', doorItem([168, 134, 82], [100, 76, 44]));
+sprite('door_spruce_item', doorItem([118, 86, 52], [64, 46, 26]));
+const fenceItem = (base, dark) => (px, rnd) => {
+  clear(px);
+  for (const x0 of [2, 11]) for (let y = 1; y < 16; y++) for (let x = x0; x < x0 + 3; x++) px.set(x, y, x === x0 + 2 ? dark : mul(base, 0.92 + rnd() * 0.12));
+  for (const y0 of [4, 10]) for (let y = y0; y < y0 + 2; y++) for (let x = 5; x < 11; x++) px.set(x, y, y === y0 + 1 ? dark : mul(base, 0.95 + rnd() * 0.1));
+};
+sprite('fence_oak_item', fenceItem([168, 134, 82], [110, 84, 48]));
+sprite('fence_spruce_item', fenceItem([118, 86, 52], [72, 52, 30]));
+add('campfire_log', paintBark([96, 72, 44], [56, 40, 24]));
+add('campfire_log_top', (px, rnd) => {
+  paintLogTop([150, 116, 70], [124, 92, 54], [76, 56, 34])(px, rnd);
+  for (let i = 0; i < 12; i++) px.set(1 + Math.floor(rnd() * 14), 1 + Math.floor(rnd() * 14), [255, 140, 40]);
+});
+// Flames tile vertically so they can scroll upward.
+add('campfire_fire', (px, rnd) => {
+  const cols = [];
+  for (let x = 0; x < 16; x++) cols.push(rnd());
+  px.each((x, y) => {
+    const edge = Math.abs(x - 7.5) / 7.5;
+    const n = Math.sin(y * 0.8 + cols[x] * 6) * 0.25 + cols[x] * 0.4;
+    const h = 1 - edge * 1.15 + n;
+    if (h < 0.25) return px.set(x, y, [0, 0, 0], 0);
+    px.set(x, y, h > 0.85 ? [255, 244, 180] : h > 0.55 ? [255, 190, 70] : [236, 110, 30]);
+  });
+});
+sprite('campfire_item', (px, rnd) => {
+  for (let y = 11; y < 15; y++) for (let x = 1; x < 15; x++) px.set(x, y, (x + y) % 5 === 0 ? [70, 50, 30] : mul([110, 82, 50], 0.9 + rnd() * 0.15));
+  for (let y = 3; y < 11; y++) for (let x = 4; x < 12; x++) {
+    const d = Math.abs(x - 7.5) / 4 + (11 - y) / 10;
+    if (d < 1 && rnd() < 0.95) px.set(x, y, d < 0.45 ? [255, 240, 170] : d < 0.75 ? [255, 180, 60] : [230, 100, 30]);
+  }
+});
+for (const [k, , col] of WOOL_COLORS) add(`concrete_${k.toLowerCase()}`, (px, rnd) => px.each((x, y) => px.set(x, y, mul(col, 0.97 + rnd() * 0.05))));
+add('packed_ice', (px, rnd) => {
+  const vo = voronoi(rnd, 9);
+  px.each((x, y) => {
+    const c = vo(x, y);
+    px.set(x, y, c.d2 - c.d1 < 0.7 ? [196, 220, 252] : mul([132, 172, 236], 0.93 + c.v * 0.12));
+  });
+});
+add('blue_ice', (px, rnd) => {
+  const vo = voronoi(rnd, 7);
+  px.each((x, y) => { const c = vo(x, y); px.set(x, y, c.d2 - c.d1 < 0.6 ? [170, 214, 255] : mul([92, 150, 236], 0.92 + c.v * 0.14)); });
+});
+add('log_dark_oak', paintBark([70, 52, 34], [40, 30, 18]));
+add('log_dark_oak_top', paintLogTop([108, 80, 50], [88, 64, 38], [58, 42, 26]));
+add('leaves_dark_oak', paintLeaves);
+add('planks_dark_oak', paintPlanks([88, 62, 36]));
+add('mushroom_stem', (px, rnd) => px.each((x, y) => px.set(x, y, mul([222, 216, 196], 0.9 + rnd() * 0.12 - (x % 4 === 0 ? 0.08 : 0)))));
+const capBlock = (base, spot) => (px, rnd) => {
+  const f = field(rnd, 1);
+  px.each((x, y) => px.set(x, y, mul(base, 0.88 + f[y * 16 + x] * 0.18)));
+  if (spot) for (let i = 0; i < 5; i++) {
+    const cx = Math.floor(rnd() * 14), cy = Math.floor(rnd() * 14);
+    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) px.set(cx + dx, cy + dy, mul(spot, 0.95 + rnd() * 0.08));
+  }
+};
+add('mushroom_block_red', capBlock([196, 40, 36], [236, 230, 216]));
+add('mushroom_block_brown', capBlock([150, 110, 76], null));
+for (const [k, , col] of CORAL_COLORS) {
+  add(`coral_${k.toLowerCase()}`, (px, rnd) => {
+    const vo = voronoi(rnd, 16);
+    px.each((x, y) => { const c = vo(x, y); px.set(x, y, mul(col, c.d1 < 1.1 ? 1.15 : c.d2 - c.d1 < 0.6 ? 0.7 : 0.9 + c.v * 0.1)); });
+  });
+  sprite(`coral_fan_${k.toLowerCase()}`, (px, rnd) => {
+    // Branching fronds growing up from the base.
+    const grow = (x, y, dx, len) => {
+      for (let i = 0; i < len; i++) {
+        px.set(Math.round(x), y, mul(col, 0.85 + rnd() * 0.3));
+        x += dx + (rnd() - 0.5) * 0.6; y--;
+        if (rnd() < 0.25 && len - i > 3) grow(x, y, dx + (rnd() < 0.5 ? -0.5 : 0.5), len - i - 2);
+      }
+    };
+    grow(7.5, 15, -0.35, 12); grow(8.5, 15, 0.35, 11); grow(8, 15, 0, 13);
+  });
+}
+sprite('seagrass', (px, rnd) => {
+  for (let b = 0; b < 5; b++) {
+    let x = 2 + b * 3 + Math.floor(rnd() * 2);
+    const h = 9 + Math.floor(rnd() * 7);
+    for (let y = 15; y > 15 - h; y--) { px.set(x, y, mul([150, 196, 150], 0.8 + rnd() * 0.3)); if (rnd() < 0.2) x += rnd() < 0.5 ? -1 : 1; }
+  }
+});
+sprite('kelp', (px, rnd) => {
+  for (let y = 0; y < 16; y++) {
+    const x = 7 + Math.round(Math.sin(y * 0.6) * 1.2);
+    px.set(x, y, [56, 110, 36]); px.set(x + 1, y, [70, 130, 44]);
+    if (y % 4 === 1) { px.set(x - 2, y, [80, 146, 50]); px.set(x - 1, y, [70, 130, 44]); }
+    if (y % 4 === 3) { px.set(x + 2, y, [80, 146, 50]); px.set(x + 3, y, [62, 118, 40]); }
+  }
+});
+sprite('kelp_top', (px, rnd) => {
+  for (let y = 5; y < 16; y++) {
+    const x = 7 + Math.round(Math.sin(y * 0.6) * 1.2);
+    px.set(x, y, [56, 110, 36]); px.set(x + 1, y, [70, 130, 44]);
+    if (y % 4 === 1 && y > 6) { px.set(x - 2, y, [80, 146, 50]); px.set(x - 1, y, [70, 130, 44]); }
+  }
+  px.set(7, 4, [90, 156, 56]); px.set(8, 3, [90, 156, 56]);
+});
+add('dripstone_block', (px, rnd) => {
+  const f = field(rnd, 1);
+  px.each((x, y) => {
+    const band = Math.sin(y * 1.3 + f[y * 16 + x] * 3) * 0.08;
+    px.set(x, y, mul([134, 106, 86], 0.86 + band + f[y * 16 + x] * 0.16 + (rnd() - 0.5) * 0.05));
+  });
+});
+sprite('pointed_dripstone', (px, rnd) => {
+  for (let y = 0; y < 16; y++) {
+    const w = Math.max(0.5, (16 - y) / 4.5);
+    for (let x = 0; x < 16; x++) {
+      const d = Math.abs(x - 7.5);
+      if (d < w) px.set(x, y, mul([140, 112, 90], (d < w - 1 ? 1 : 0.78) * (0.9 + rnd() * 0.12)));
+    }
+  }
+});
+add('mud', (px, rnd) => noiseFill(px, rnd, [70, 58, 54], 0.14, 4, 1));
+add('mud_bricks', (px, rnd) => {
+  px.each((x, y) => {
+    const row = y >> 2, off = row % 2 ? 4 : 0;
+    const mortar = (y & 3) === 3 || ((x + off) & 7) === 7;
+    px.set(x, y, mortar ? [120, 98, 74] : mul([150, 120, 88], 0.9 + rnd() * 0.14));
+  });
+});
+add('prism_lamp', (px, rnd) => {
+  px.each((x, y) => {
+    const e = x === 0 || y === 0 || x === 15 || y === 15;
+    const g = (x + y) % 5 === 0 || (x - y + 16) % 5 === 0;
+    px.set(x, y, e ? [96, 150, 150] : g ? [210, 250, 240] : mul([150, 220, 214], 0.94 + rnd() * 0.1));
+  });
+});
+
+// ---------- shaders & content update: items ----------
+const ARMOR_COLORS = {
+  leather: [[150, 92, 52], [104, 62, 34], [186, 126, 78]],
+  copper: [[214, 120, 70], [158, 80, 44], [246, 168, 120]],
+  iron: [[214, 214, 220], [150, 150, 160], [250, 250, 255]],
+  diamond: [[90, 228, 218], [40, 160, 156], [190, 255, 250]],
+};
+const ARMOR_SHAPES = {
+  helmet: ['', '', '', '', '...######...', '..#hhhhhh#..', '.#hhhhhhhh#.', '.#hhd..dhh#.', '.#h#....#h#.', '.##......##.'],
+  chestplate: ['', '.##......##.', '#hh##..##hh#', '#hhh####hhh#', '#hhhhhhhhhh#', '.##hhhhhh##.', '..#hhhhhh#..', '..#hhhhhh#..', '..#hhhhhh#..', '..#hhhhhh#..', '..#dddddd#..', '...######...'],
+  leggings: ['', '', '..########..', '..#hhhhhh#..', '..#hhhhhh#..', '..#hhd#hh#..', '..#hh##hh#..', '..#hh##hh#..', '..#hh##hh#..', '..#hh##hh#..', '..#dd##dd#..', '..####.###..'],
+  boots: ['', '', '', '', '', '', '', '.###....###.', '.#h#....#h#.', '.#h#....#h#.', '##hh#..#hh##', '#dddd##dddd#', '######.#####'],
+};
+for (const [mat, [base, dark, light]] of Object.entries(ARMOR_COLORS)) {
+  for (const [piece, rows] of Object.entries(ARMOR_SHAPES)) {
+    sprite(`${mat}_${piece}`, (px, rnd) => {
+      rows.forEach((row, y) => [...row].forEach((ch, x) => {
+        if (ch === '#') px.set(x + 2, y + 2, mul(dark, 0.8));
+        else if (ch === 'h') px.set(x + 2, y + 2, (x + y) % 4 === 0 ? light : mul(base, 0.94 + rnd() * 0.1));
+        else if (ch === 'd') px.set(x + 2, y + 2, dark);
+      }));
+    });
+  }
+}
+sprite('leather', (px, rnd) => {
+  for (let y = 3; y < 14; y++) for (let x = 2; x < 14; x++) {
+    const d = Math.hypot((x - 7.5) / 6, (y - 8.5) / 5.5) + Math.sin(x * 2 + y) * 0.05;
+    if (d < 1) px.set(x, y, d > 0.85 ? [96, 56, 30] : mul([150, 92, 52], 0.9 + rnd() * 0.15));
+  }
+});
+sprite('shears', (px) => {
+  for (let k = 0; k < 7; k++) { px.set(8 + k, 7 - k, [220, 220, 228]); px.set(7 + k, 7 - k, [170, 170, 180]); px.set(8 - k, 7 - k, [200, 200, 210]); }
+  for (const [x, y] of [[5, 10], [6, 11], [4, 11], [5, 12], [10, 10], [11, 11], [9, 11], [10, 12]]) px.set(x, y, [60, 60, 66]);
+  px.set(7, 8, [60, 60, 66]); px.set(8, 8, [60, 60, 66]); px.set(6, 9, [60, 60, 66]); px.set(9, 9, [60, 60, 66]);
+});
+sprite('bone_meal', (px, rnd) => {
+  for (let y = 5; y < 14; y++) for (let x = 3; x < 13; x++) {
+    const d = Math.hypot((x - 7.5) / 4.8, (y - 10) / 3.5);
+    if (d < 1 && rnd() < 0.85) px.set(x, y, rnd() < 0.3 ? [206, 206, 196] : [244, 244, 236]);
+  }
+});
+const fish = (body, belly, fin) => (px) => {
+  for (let y = 4; y < 13; y++) for (let x = 1; x < 12; x++) {
+    const d = Math.hypot((x - 6.5) / 5.5, (y - 8.5) / 3.6);
+    if (d < 1) px.set(x, y, y > 9 ? belly : body);
+  }
+  for (let y = 4; y < 13; y++) { const w = Math.abs(y - 8.5); for (let x = 12; x < 12 + Math.max(0, 4 - w * 0.4); x++) if (w > 1 || x < 13) px.set(x, y, fin); }
+  px.set(3, 7, [20, 20, 20]); px.set(5, 4, fin); px.set(6, 3, fin); px.set(7, 4, fin);
+};
+sprite('raw_fish', fish([120, 150, 160], [214, 200, 190], [90, 120, 132]));
+sprite('cooked_fish', fish([186, 140, 90], [226, 196, 150], [150, 104, 62]));
+
+// ---------- shaders & content update: creatures (original designs) ----------
+// Wolf: grey-brown fur with a pale chest; tamed wolves wear a red collar.
+const WF = { fur: [150, 146, 140], furD: [108, 104, 100], pale: [214, 208, 196], nose: [40, 34, 32], eye: [236, 200, 70] };
+add('wf_fur', (px, rnd) => px.each((x, y) => px.set(x, y, rnd() < 0.2 ? WF.furD : mul(WF.fur, 0.92 + rnd() * 0.12))));
+add('wf_face', (px, rnd) => {
+  px.each((x, y) => px.set(x, y, rnd() < 0.15 ? WF.furD : mul(WF.fur, 0.94 + rnd() * 0.1)));
+  px.set(1, 2, WF.eye); px.set(4, 2, WF.eye); px.set(1, 1, WF.furD); px.set(4, 1, WF.furD);
+  for (let x = 1; x < 5; x++) px.set(x, 4, WF.pale);
+});
+add('wf_snout', (px) => px.each((x, y) => px.set(x, y, y === 0 && (x === 1 || x === 2) ? WF.nose : WF.pale)));
+add('wf_belly', (px, rnd) => px.each((x, y) => px.set(x, y, mul(WF.pale, 0.92 + rnd() * 0.1))));
+add('wf_collar', (px) => px.each((x, y) => px.set(x, y, x % 3 === 0 ? [150, 20, 30] : [196, 36, 44])));
+// Bear: heavy dark-brown coat, lighter muzzle.
+const BR = { fur: [92, 64, 44], furD: [64, 44, 30], muzzle: [176, 144, 110], nose: [30, 24, 22] };
+add('br_fur', (px, rnd) => { const f = field(rnd, 1); px.each((x, y) => px.set(x, y, mul(f[y * 16 + x] > 0.7 ? BR.furD : BR.fur, 0.9 + rnd() * 0.14))); });
+add('br_face', (px, rnd) => {
+  px.each((x, y) => px.set(x, y, mul(BR.fur, 0.92 + rnd() * 0.12)));
+  px.set(1, 2, [20, 16, 14]); px.set(5, 2, [20, 16, 14]);
+});
+add('br_muzzle', (px) => px.each((x, y) => px.set(x, y, y < 1 && x > 0 && x < 3 ? BR.nose : BR.muzzle)));
+// Bat: a small dark flier with leathery wings.
+add('bt_body', (px, rnd) => px.each((x, y) => px.set(x, y, mul([70, 54, 44], 0.9 + rnd() * 0.15))));
+add('bt_face', (px) => { px.each((x, y) => px.set(x, y, [70, 54, 44])); px.set(0, 1, [240, 220, 90]); px.set(2, 1, [240, 220, 90]); });
+add('bt_wing', (px, rnd) => px.each((x, y) => px.set(x, y, (x + y) % 4 === 0 ? [40, 32, 28] : mul([58, 46, 40], 0.9 + rnd() * 0.1))));
+// Trout: speckled olive back, silver-pink flank.
+add('tr_side', (px, rnd) => px.each((x, y) => {
+  let c = y < 2 ? [92, 108, 70] : y < 3 ? [196, 140, 150] : [210, 210, 206];
+  if (y < 3 && rnd() < 0.2) c = [40, 46, 30];
+  px.set(x, y, mul(c, 0.95 + rnd() * 0.08));
+}));
+add('tr_top', (px, rnd) => px.each((x, y) => px.set(x, y, rnd() < 0.2 ? [40, 46, 30] : [92, 108, 70])));
+add('tr_face', (px) => { px.each((x, y) => px.set(x, y, y < 2 ? [92, 108, 70] : [210, 210, 206])); px.set(0, 1, [20, 20, 20]); px.set(2, 1, [20, 20, 20]); });
+add('tr_fin', (px, rnd) => px.each((x, y) => px.set(x, y, mul([150, 120, 110], 0.9 + rnd() * 0.15))));
+// Cave beetle: glossy blue-black shell with faint glowing spots.
+add('bl_shell', (px, rnd) => px.each((x, y) => px.set(x, y, (x * 7 + y * 3) % 11 === 0 ? [80, 230, 200] : mul([36, 44, 70], 0.85 + rnd() * 0.3))));
+add('bl_body', (px, rnd) => px.each((x, y) => px.set(x, y, mul([30, 30, 36], 0.9 + rnd() * 0.15))));
+add('bl_face', (px) => { px.each((x, y) => px.set(x, y, [30, 30, 36])); px.set(1, 1, [255, 90, 60]); px.set(4, 1, [255, 90, 60]); });
+add('bl_leg', (px) => px.each((x, y) => px.set(x, y, [24, 22, 26])));
+// Boomshroom: a walking toadstool that swells and bursts.
+add('bs_cap', (px, rnd) => px.each((x, y) => px.set(x, y, (x * 5 + y * 7) % 9 === 0 ? [240, 236, 220] : mul([188, 44, 40], 0.9 + rnd() * 0.15))));
+add('bs_stem', (px, rnd) => px.each((x, y) => px.set(x, y, mul([226, 214, 186], 0.9 + rnd() * 0.12))));
+add('bs_face', (px, rnd) => {
+  px.each((x, y) => px.set(x, y, mul([226, 214, 186], 0.92 + rnd() * 0.1)));
+  px.set(1, 1, [30, 24, 20]); px.set(1, 2, [30, 24, 20]); px.set(4, 1, [30, 24, 20]); px.set(4, 2, [30, 24, 20]);
+  for (let x = 2; x < 4; x++) { px.set(x, 4, [70, 40, 30]); px.set(x, 5, [70, 40, 30]); }
+});
+add('bs_gill', (px) => px.each((x, y) => px.set(x, y, x % 2 ? [150, 110, 90] : [196, 160, 130])));
+
 export const LAYER_COUNT = layerData.length;
 
 export function textureArrayData() {
@@ -1384,7 +1650,7 @@ export function iconURL(id) {
   ctx.imageSmoothingEnabled = false;
   const d = itemDef(id);
   if (!d) return '';
-  if (d.isBlock && (d.render === R.CUBE || d.render === R.CUTOUT || d.render === R.GLASS || d.render === R.SLAB)) {
+  if (d.isBlock && !d.iconLayer && (d.render === R.CUBE || d.render === R.CUTOUT || d.render === R.GLASS || d.render === R.SLAB || d.render === R.SHAPED)) {
     const top = layerCanvas(TEXL[id * 6 + 2], d.tint && d.tint !== 2 ? tintFor(d.tint) : null);
     const sideTint = d.tint >= 3 ? tintFor(d.tint) : null;
     const left = layerCanvas(d.front ? FRONTL[id] : TEXL[id * 6 + 4], sideTint);
@@ -1400,7 +1666,7 @@ export function iconURL(id) {
     face(right, k, -h, 0, k, 32, 32, 0.42);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   } else {
-    const layer = d.isBlock ? TEXL[id * 6] : d.layer;
+    const layer = d.isBlock ? d.iconLayer || TEXL[id * 6] : d.layer;
     const tint = d.isBlock && d.tint === 2 ? DEFAULT_GRASS : null;
     ctx.drawImage(layerCanvas(layer, tint), 4, 4, 56, 56);
   }
@@ -1418,6 +1684,7 @@ export function hudIcon(kind) {
   const heart = ['.##...##.', '#hh#.#hh#', '#hhh#hhh#', '#hhhhhhh#', '.#hhhhh#.', '..#hhh#..', '...#h#...', '....#....'];
   const food = ['...###...', '..#lll#..', '.#lllll#.', '#llmmmll#', '#lmmmmml#', '#mmmmmmm#', '.#mmmmm#.', '..#####..'];
   const air = ['..###..', '.#lll#.', '#ll.mm#', '#l.mmm#', '#mmmmm#', '.#mmm#.', '..###..'];
+  const armor = ['##.....##', '#l#...#m#', '#ll###mm#', '.#llmmm#.', '.#llmmm#.', '.#llmmm#.', '.#llmmm#.', '..#####..'];
   const maps = {
     heart_full: [heart, { '#': '#1a0a0a', h: '#e0302c' }],
     heart_empty: [heart, { '#': '#1a0a0a', h: '#3a2626' }],
@@ -1426,6 +1693,9 @@ export function hudIcon(kind) {
     food_empty: [food, { '#': '#2a1606', l: '#3a2a20', m: '#30221a' }],
     food_half: [food, { '#': '#2a1606', l: 'halfl', m: 'halfm' }],
     air: [air, { '#': '#10305a', l: '#d8f0ff', m: '#5aa6f0' }],
+    armor_full: [armor, { '#': '#1c1c22', l: '#e8e8f0', m: '#a8a8b8' }],
+    armor_half: [armor, { '#': '#1c1c22', l: '#e8e8f0', m: '#3a3a44' }],
+    armor_empty: [armor, { '#': '#1c1c22', l: '#3a3a44', m: '#30303a' }],
   };
   const [map, pal] = maps[kind];
   map.forEach((row, y) => [...row].forEach((ch, x) => {

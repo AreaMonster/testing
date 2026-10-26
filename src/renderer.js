@@ -49,6 +49,7 @@ void main() {
   vec3 uv = aUV;
   if ((flags & 1) != 0) uv.xy += vec2(uTime * 0.025, uTime * 0.05);
   if ((flags & 2) != 0) uv.xy += vec2(uTime * 0.006, uTime * 0.012);
+  if ((flags & 32) != 0) uv.y += uTime * 0.9;
   wp.xyz = animate(wp.xyz, aPos + uChunk, flags, uTime);
   gl_Position = uProjView * wp;
   vUV = uv;
@@ -621,11 +622,11 @@ export class Renderer {
     if (m) return m;
     const d = id < 256 ? BLOCKS[id] : ITEMS[id];
     let data, flat = true;
-    if (d.isBlock && (d.render === R.CUBE || d.render === R.CUTOUT)) {
+    if (d.isBlock && !d.iconLayer && (d.render === R.CUBE || d.render === R.CUTOUT || d.render === R.GLASS || d.render === R.SLAB || d.render === R.SHAPED)) {
       data = blockItemMesh(id, DEFAULT_GRASS);
       flat = false;
     } else {
-      const layer = d.isBlock ? TEXL[id * 6] : d.layer;
+      const layer = d.isBlock ? d.iconLayer || TEXL[id * 6] : d.layer;
       const ld = layerData[layer];
       const tint = d.isBlock && TINT[id] === 2 ? DEFAULT_GRASS : [255, 255, 255];
       data = spriteMesh(layer, (x, y) => ld[(y * 16 + x) * 4 + 3], tint);
@@ -1132,8 +1133,8 @@ export class Renderer {
       gl.useProgram(this.line.p);
       gl.enable(gl.BLEND);
       gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
-      const y0 = s.y0 || 0, y1 = s.y1 === undefined ? 1 : s.y1;
-      this.tmp.identity().translate(s.x - 0.002 - cam.x, s.y + y0 - 0.002 - cam.y, s.z - 0.002 - cam.z).scale(1.004, y1 - y0 + 0.004, 1.004);
+      const b = s.b || [0, 0, 0, 1, 1, 1];
+      this.tmp.identity().translate(s.x + b[0] - 0.002 - cam.x, s.y + b[1] - 0.002 - cam.y, s.z + b[2] - 0.002 - cam.z).scale(b[3] - b[0] + 0.004, b[4] - b[1] + 0.004, b[5] - b[2] + 0.004);
       gl.uniformMatrix4fv(this.line.u.uProjView, false, this.pv.m);
       gl.uniformMatrix4fv(this.line.u.uModel, false, this.tmp.m);
       gl.uniform4f(this.line.u.uColor, 0.05, 0.05, 0.05, 0.6);
