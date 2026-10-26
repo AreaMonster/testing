@@ -1,5 +1,5 @@
 // Axis-aligned box collision against the voxel grid, plus voxel raycasting.
-import { TARGET, LIQUID, SHAPE, blockSpan } from './blocks.js';
+import { TARGET, LIQUID, SHAPE } from './blocks.js';
 
 const EPS = 1e-5;
 
@@ -12,22 +12,26 @@ function sweep(world, b, axis, d) {
   const bx0 = Math.floor(x0 + EPS), bx1 = Math.floor(x1 - EPS);
   const by0 = Math.floor(y0 + EPS) - 1, by1 = Math.floor(y1 - EPS);
   const bz0 = Math.floor(z0 + EPS), bz1 = Math.floor(z1 - EPS);
+  const lo = [0, 0, 0], hi = [0, 0, 0];
   for (let by = by0; by <= by1; by++) for (let bz = bz0; bz <= bz1; bz++) for (let bx = bx0; bx <= bx1; bx++) {
-    const span = world.solidSpan(bx, by, bz);
-    if (!span) continue;
-    const lo = [bx, by + span[0], bz], hi = [bx + 1, by + span[1], bz + 1];
-    let overlap = true;
-    for (let a = 0; a < 3 && overlap; a++) {
-      if (a === axis) continue;
-      if (hi[a] <= b[a] + EPS || lo[a] >= b[3 + a] - EPS) overlap = false;
-    }
-    if (!overlap) continue;
-    if (d > 0) {
-      const lim = lo[axis] - b[3 + axis];
-      if (lim >= -EPS && lim < d) d = Math.max(0, lim - EPS);
-    } else {
-      const lim = hi[axis] - b[axis];
-      if (lim <= EPS && lim > d) d = Math.min(0, lim + EPS);
+    const boxes = world.solidBoxes(bx, by, bz);
+    if (!boxes) continue;
+    for (const q of boxes) {
+      lo[0] = bx + q[0]; lo[1] = by + q[1]; lo[2] = bz + q[2];
+      hi[0] = bx + q[3]; hi[1] = by + q[4]; hi[2] = bz + q[5];
+      let overlap = true;
+      for (let a = 0; a < 3 && overlap; a++) {
+        if (a === axis) continue;
+        if (hi[a] <= b[a] + EPS || lo[a] >= b[3 + a] - EPS) overlap = false;
+      }
+      if (!overlap) continue;
+      if (d > 0) {
+        const lim = lo[axis] - b[3 + axis];
+        if (lim >= -EPS && lim < d) d = Math.max(0, lim - EPS);
+      } else {
+        const lim = hi[axis] - b[axis];
+        if (lim <= EPS && lim > d) d = Math.min(0, lim + EPS);
+      }
     }
   }
   return d;
@@ -108,10 +112,13 @@ export function raycast(world, ox, oy, oz, dx, dy, dz, maxDist, liquids = false)
   while (t <= maxDist) {
     const id = world.getBlock(x, y, z);
     if (id && SHAPE[id] && TARGET[id]) {
-      // Partial blocks (slabs, bedrolls): hit only their real box.
-      const [y0, y1] = blockSpan(id, world.getMeta(x, y, z));
-      const h = rayBoxNormal(ox, oy, oz, dx, dy, dz, [x, y + y0, z, x + 1, y + y1, z + 1]);
-      if (h && h.t <= maxDist) return { x, y, z, nx: h.n[0], ny: h.n[1], nz: h.n[2], id, t: h.t };
+      // Partial blocks (slabs, stairs, doors, fences): hit only their real boxes.
+      let best = null;
+      for (const q of world.shapeAt(x, y, z)) {
+        const h = rayBoxNormal(ox, oy, oz, dx, dy, dz, [x + q[0], y + q[1], z + q[2], x + q[3], y + q[4], z + q[5]]);
+        if (h && h.t <= maxDist && (!best || h.t < best.t)) best = h;
+      }
+      if (best) return { x, y, z, nx: best.n[0], ny: best.n[1], nz: best.n[2], id, t: best.t };
     } else if (id && (TARGET[id] || (liquids && LIQUID[id] && world.getMeta(x, y, z) === 0))) return { x, y, z, nx, ny, nz, id, t };
     if (tmx < tmy && tmx < tmz) { x += sx; t = tmx; tmx += tdx; nx = -sx; ny = 0; nz = 0; }
     else if (tmy < tmz) { y += sy; t = tmy; tmy += tdy; nx = 0; ny = -sy; nz = 0; }

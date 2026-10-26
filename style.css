@@ -180,6 +180,7 @@ body {
 #itemname { font-size: 17px; color: #fff; text-shadow: 0 2px 0 #000; height: 22px; opacity: 0; transition: opacity 0.3s; }
 #stats { display: flex; justify-content: space-between; width: calc(var(--slot-size) * 9 + 8px); align-items: flex-end; }
 #right-stats { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+#left-stats { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .iconrow { display: flex; gap: 1px; height: 18px; }
 #food { flex-direction: row-reverse; }
 #air { flex-direction: row-reverse; }
@@ -227,6 +228,8 @@ body {
 .inv-top-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .inv-title { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
 .craft-grid { display: grid; gap: 2px; }
+.armor-col { display: grid; gap: 2px; margin-right: 10px; }
+.armor-slot:empty::after { content: attr(data-label); position: absolute; inset: 0; display: grid; place-items: center; font-size: 10px; color: rgba(255, 255, 255, 0.28); pointer-events: none; }
 .arrow { font-size: 26px; color: var(--muted); width: 40px; text-align: center; position: relative; }
 .slot.out { width: calc(var(--slot-size) + 12px); height: calc(var(--slot-size) + 12px); border-color: var(--lamp-deep); }
 .furnace { display: grid; grid-template-columns: auto auto auto; grid-template-rows: auto auto auto; gap: 4px 14px; align-items: center; }
@@ -285,3 +288,8 @@ body.touch #crosshair { opacity: 0.8; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+.slider > label { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 6px; }
+.slider-row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+.slider-row input[type="range"] { flex: 1; }
+.slider .num { flex: none; width: 72px; background: var(--slot); color: inherit; border: 2px solid var(--line); padding: 4px 6px; font: inherit; }

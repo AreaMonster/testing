@@ -24,7 +24,10 @@
   <div id="bottom">
     <div id="itemname"></div>
     <div id="stats">
-      <div id="hearts" class="iconrow"></div>
+      <div id="left-stats">
+        <div id="armor" class="iconrow"></div>
+        <div id="hearts" class="iconrow"></div>
+      </div>
       <div id="right-stats">
         <div id="air" class="iconrow"></div>
         <div id="food" class="iconrow"></div>
@@ -125,7 +128,12 @@
   <div class="panel menu-panel wide">
     <h2>Settings</h2>
     <div class="settings-grid">
-      <label class="slider">Render distance <output id="out-renderDist"></output><input id="set-renderDist" type="range" min="3" max="16" step="1"></label>
+      <div class="slider">
+        <label for="set-renderDist">Render distance <output id="out-renderDist"></output></label>
+        <div class="slider-row"><input id="set-renderDist" type="range" min="4" max="256" step="1"><input id="num-renderDist" class="num" type="number" min="2" max="9999" step="1" aria-label="Render distance in chunks"></div>
+      </div>
+      <label class="slider">Detail distance <output id="out-detailDist"></output><input id="set-detailDist" type="range" min="4" max="32" step="1"></label>
+      <label class="slider">Shaders <output id="out-shaders"></output><input id="set-shaders" type="range" min="0" max="2" step="1"></label>
       <label class="slider">Field of view <output id="out-fov"></output><input id="set-fov" type="range" min="50" max="110" step="1"></label>
       <label class="slider">Mouse sensitivity <output id="out-sensitivity"></output><input id="set-sensitivity" type="range" min="0.2" max="3" step="0.05"></label>
       <label class="slider">Brightness <output id="out-gamma"></output><input id="set-gamma" type="range" min="0.5" max="1.2" step="0.05"></label>

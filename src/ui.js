@@ -42,7 +42,7 @@ export class UI {
     this.nameT = 0;
     this.debugT = 0;
     this.icons = {};
-    for (const k of ['heart_full', 'heart_half', 'heart_empty', 'food_full', 'food_half', 'food_empty', 'air']) this.icons[k] = hudIcon(k);
+    for (const k of ['heart_full', 'heart_half', 'heart_empty', 'food_full', 'food_half', 'food_empty', 'air', 'armor_full', 'armor_half', 'armor_empty']) this.icons[k] = hudIcon(k);
   }
 
   attach(game) {
@@ -190,11 +190,12 @@ export class UI {
     click('btn-death-title', () => { g.quitToTitle(); });
     $('clicktoplay').addEventListener('click', () => this.lock());
 
-    const keys = ['renderDist', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale'];
+    const keys = ['renderDist', 'detailDist', 'shaders', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale'];
     const fmt = {
-      renderDist: (v) => `${v} chunks`, fov: (v) => `${v}°`, sensitivity: (v) => `${Math.round(v * 100)}%`,
+      renderDist: (v) => `${v} chunks · ${(v * 16).toLocaleString()} blocks`,
+      detailDist: (v) => `${v} chunks${v > 16 ? ' (needs a fast computer)' : ''}`, fov: (v) => `${v}°`, sensitivity: (v) => `${Math.round(v * 100)}%`,
       gamma: (v) => `${Math.round(v * 100)}%`, music: (v) => `${Math.round(v * 100)}%`, sfx: (v) => `${Math.round(v * 100)}%`,
-      scale: (v) => `${Math.round(v * 100)}%`,
+      scale: (v) => `${Math.round(v * 100)}%`, shaders: (v) => ['Off', 'Fast (shadows)', 'Fancy (soft shadows, light shafts)'][v | 0],
     };
     for (const k of keys) {
       $(`set-${k}`).addEventListener('input', (e) => {
@@ -204,6 +205,17 @@ export class UI {
       });
     }
     this.fmt = fmt;
+    // Type any render distance; the slider only covers the common range.
+    $('num-renderDist').addEventListener('change', (e) => {
+      const v = Math.max(2, Math.min(9999, Math.round(parseFloat(e.target.value) || g.settings.renderDist)));
+      g.settings.renderDist = v;
+      e.target.value = v;
+      $('set-renderDist').value = Math.min(256, v);
+      $('out-renderDist').textContent = fmt.renderDist(v);
+      g.applySettings();
+    });
+    $('num-renderDist').addEventListener('keydown', (e) => e.stopPropagation());
+    $('set-renderDist').addEventListener('input', () => { $('num-renderDist').value = g.settings.renderDist; });
     for (const k of ['bob', 'fancyLeaves', 'clouds', 'invertY', 'post']) {
       $(`set-${k}`).addEventListener('change', (e) => { g.settings[k] = e.target.checked; g.applySettings(); });
     }
@@ -211,10 +223,11 @@ export class UI {
 
   renderSettings() {
     const s = this.game.settings;
-    for (const k of ['renderDist', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale']) {
+    for (const k of ['renderDist', 'detailDist', 'shaders', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale']) {
       $(`set-${k}`).value = s[k];
       $(`out-${k}`).textContent = this.fmt[k](s[k]);
     }
+    $('num-renderDist').value = s.renderDist;
     for (const k of ['bob', 'fancyLeaves', 'clouds', 'invertY', 'post']) $(`set-${k}`).checked = !!s[k];
   }
 
@@ -290,6 +303,7 @@ export class UI {
       for (let i = 0; i < n; i++) { const img = document.createElement('img'); img.alt = ''; row.appendChild(img); arr.push(img); }
       return arr;
     };
+    this.armorEls = mk('armor', 10);
     this.heartEls = mk('hearts', 10);
     this.foodEls = mk('food', 10);
     this.airEls = mk('air', 10);
@@ -311,7 +325,7 @@ export class UI {
       c.textContent = s.count;
       el.appendChild(c);
     }
-    const tool = toolOf(s);
+    const tool = toolOf(s) || itemDef(s.id).armor;
     if (tool && s.dmg) {
       const f = 1 - s.dmg / tool.dur;
       const bar = document.createElement('div');
@@ -346,6 +360,12 @@ export class UI {
       h.health = hp;
       this.heartEls.forEach((img, i) => { img.src = this.icons[hp >= i * 2 + 2 ? 'heart_full' : hp === i * 2 + 1 ? 'heart_half' : 'heart_empty']; });
       $('hearts').classList.toggle('low', hp <= 4);
+    }
+    let ap = 0;
+    for (const a of p.armor.slots) if (a) ap += itemDef(a.id).armor.points;
+    if (h.armor !== ap) {
+      h.armor = ap;
+      this.armorEls.forEach((img, i) => { img.hidden = !ap; img.src = this.icons[ap >= i * 2 + 2 ? 'armor_full' : ap === i * 2 + 1 ? 'armor_half' : 'armor_empty']; });
     }
     const fd = Math.ceil(p.hunger);
     if (h.food !== fd) {
@@ -547,9 +567,20 @@ export class UI {
 
     if (kind === 'player' || kind === 'craft') {
       const size = kind === 'craft' ? 3 : 2;
-      title(kind === 'craft' ? 'Crafting table' : 'Crafting');
+      title(kind === 'craft' ? 'Crafting table' : 'Armour and crafting');
       const row = document.createElement('div');
       row.className = 'inv-top-row';
+      if (kind === 'player') {
+        // Armour column: head, chest, legs, feet; each slot only takes its own piece.
+        const col = document.createElement('div');
+        col.className = 'armor-col';
+        const ar = g.player.armor;
+        ['Head', 'Chest', 'Legs', 'Feet'].forEach((label, i) => {
+          const el = mkSlot(col, { get: () => ar.get(i), set: (st) => ar.set(i, st), group: 'armor', slot: i, accept: (st) => { const a = itemDef(st.id).armor; return !!a && a.slot === i; } }, 'armor-slot');
+          el.dataset.label = label;
+        });
+        row.appendChild(col);
+      }
       const grid = document.createElement('div');
       grid.className = 'craft-grid';
       grid.style.gridTemplateColumns = `repeat(${size}, var(--slot-size))`;
@@ -674,7 +705,7 @@ export class UI {
     tt.innerHTML = '';
     tt.append(itemName(s.id));
     const def = itemDef(s.id);
-    const extra = tool ? `Durability ${tool.dur - (s.dmg || 0)} / ${tool.dur}` : def.food ? `Restores ${def.food / 2} food` : '';
+    const extra = tool ? `Durability ${tool.dur - (s.dmg || 0)} / ${tool.dur}` : def.armor ? `+${def.armor.points} armour · ${def.armor.dur - (s.dmg || 0)} / ${def.armor.dur}` : def.food ? `Restores ${def.food / 2} food` : '';
     if (extra) { const sm = document.createElement('small'); sm.textContent = extra; tt.appendChild(sm); }
     tt.hidden = false;
   }
@@ -714,6 +745,7 @@ export class UI {
     if (shift) { this.quickMove(ref); this.refreshInventory(); return; }
     const s = ref.get();
     const c = this.cursor;
+    if (c && ref.accept && !ref.accept(c)) return;
     if (ref.output) {
       if (!s) return;
       if (c && !(canMerge(c, s) && c.count + s.count <= maxStackOf(s.id))) return;
@@ -797,6 +829,11 @@ export class UI {
     let targets;
     const kind = this.inv.kind;
     if (ref.group === 'hot' || ref.group === 'main') {
+      const armor = itemDef(s.id).armor;
+      if (armor && kind === 'player') {
+        const slot = all.find((r) => r.group === 'armor' && r.slot === armor.slot);
+        if (slot && !slot.get()) { slot.set({ ...s }); ref.set(null); p.inv.changed(); return; }
+      }
       if (kind === 'chest') targets = all.filter((r) => r.group === 'chest');
       else if (kind === 'furnace') targets = SMELT[s.id] !== undefined ? all.filter((r) => r.group === 'fin') : fuelTime(s.id) ? all.filter((r) => r.group === 'ffuel') : null;
       if (!targets) targets = ref.group === 'hot' ? main : hot;

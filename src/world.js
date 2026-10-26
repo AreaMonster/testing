@@ -1,7 +1,8 @@
 // Chunk storage, block access, flood-fill lighting and fluid simulation.
-import { B, BLOCKS, OPAQUE, SOLID, FILTER, EMIT, LIQUID, REPLACEABLE, SHAPE, blockSpan } from './blocks.js';
+import { B, BLOCKS, OPAQUE, SOLID, FILTER, EMIT, LIQUID, REPLACEABLE, SHAPE, blockSpan, shapeBoxes, connects } from './blocks.js';
 
 const FULL = [0, 1];
+const FULL_BOXES = [[0, 0, 0, 1, 1, 1]];
 import { CS, CH } from './consts.js';
 
 export const idx = (x, y, z) => (y << 8) | (z << 4) | x;
@@ -82,6 +83,33 @@ export class World {
     const i = idx(x & 15, y, z & 15), id = c.blocks[i];
     if (!SOLID[id]) return null;
     return SHAPE[id] ? blockSpan(id, c.meta[i]) : FULL;
+  }
+  // Neighbour connection bits for fences and panes (+x 1, -x 2, +z 4, -z 8).
+  connMask(x, y, z, id) {
+    let m = 0;
+    if (connects(id, this.getBlock(x + 1, y, z))) m |= 1;
+    if (connects(id, this.getBlock(x - 1, y, z))) m |= 2;
+    if (connects(id, this.getBlock(x, y, z + 1))) m |= 4;
+    if (connects(id, this.getBlock(x, y, z - 1))) m |= 8;
+    return m;
+  }
+  // Collision boxes (block-local) of a cell, or null when it can be walked through.
+  solidBoxes(x, y, z) {
+    if (y < 0) return FULL_BOXES;
+    if (y >= CH) return null;
+    const c = this.getChunk(x >> 4, z >> 4);
+    if (!c) return FULL_BOXES;
+    const i = idx(x & 15, y, z & 15), id = c.blocks[i];
+    if (!SOLID[id]) return null;
+    const sh = SHAPE[id];
+    if (!sh) return FULL_BOXES;
+    return shapeBoxes(id, c.meta[i], sh === 5 || sh === 6 ? this.connMask(x, y, z, id) : 0, true);
+  }
+  // Visual boxes of a shaped block (for picking and the selection outline).
+  shapeAt(x, y, z) {
+    const id = this.getBlock(x, y, z), sh = SHAPE[id];
+    if (!sh) return null;
+    return shapeBoxes(id, this.getMeta(x, y, z), sh === 5 || sh === 6 ? this.connMask(x, y, z, id) : 0, false);
   }
   // Highest non-air block in a column (cached per chunk; used for rain).
   topAt(x, z) {
@@ -348,6 +376,8 @@ export class World {
     if (!kind) return;
     const meta = this.getMeta(x, y, z);
     const maxLevel = kind === 1 ? 7 : 3;
+    // Water-logged plants act as sources but spread plain water.
+    const fid = kind === 1 ? B.WATER : B.LAVA;
     const eff = (m) => (m === 0 || m === 8 ? 0 : m);
     if (meta !== 0) {
       let want;
@@ -374,7 +404,7 @@ export class World {
     if (y > 0) {
       if (LIQUID[below] && LIQUID[below] !== kind) { this.mixLiquids(x, y - 1, z, kind, below); return; }
       if (LIQUID[below] === kind) return;
-      if (!LIQUID[below] && (below === 0 || REPLACEABLE[below])) { this.setBlock(x, y - 1, z, id, 8); return; }
+      if (!LIQUID[below] && (below === 0 || REPLACEABLE[below])) { this.setBlock(x, y - 1, z, fid, 8); return; }
     }
     const e = eff(meta);
     if (e >= maxLevel) return;
@@ -385,10 +415,10 @@ export class World {
       if (LIQUID[nb] && LIQUID[nb] !== kind) { this.mixLiquids(nx, y, nz, kind, nb); continue; }
       if (LIQUID[nb] === kind) {
         const nm = this.getMeta(nx, y, nz);
-        if (nm !== 0 && nm !== 8 && nm > e + 1) this.setBlock(nx, y, nz, id, e + 1);
+        if (nm !== 0 && nm !== 8 && nm > e + 1) this.setBlock(nx, y, nz, fid, e + 1);
         continue;
       }
-      if (nb === 0 || REPLACEABLE[nb]) this.setBlock(nx, y, nz, id, e + 1);
+      if (nb === 0 || REPLACEABLE[nb]) this.setBlock(nx, y, nz, fid, e + 1);
     }
   }
 

@@ -1,9 +1,8 @@
 // Builds chunk geometry with smooth lighting and ambient occlusion.
 // Vertex layout: f32 [x,y,z,u,v,layer] + u8 [sky,block,bright,flags,r,g,b,0].
-import { B, OPAQUE, RENDER, TINT, CULLSAME, LIQUID, LEAF, LOG, TEXL, FRONTL, BLOCKS, R, blockSpan } from './blocks.js';
+import { B, OPAQUE, RENDER, TINT, CULLSAME, LIQUID, LEAF, LOG, TEXL, FRONTL, BLOCKS, R, SHAPE, blockSpan, shapeBoxes, connects, BIRCH_TINT, SPRUCE_TINT, LAYER_IDS as LAYERS } from './blocks.js';
 import { CH } from './consts.js';
 import { hash2 } from './noise.js';
-import { BIRCH_TINT, SPRUCE_TINT, LAYERS } from './textures.js';
 
 const PX = 18, OX = 1, OZ = PX, OY = PX * PX;
 const PSIZE = PX * PX * (CH + 2);
@@ -107,6 +106,21 @@ function cornerHeight(p, kind, cx, cz) {
 
 export function buildChunkMesh(world, chunk, opts = {}) {
   fill(world, chunk);
+  return build(opts);
+}
+
+// Copies of the padded neighbourhood, so a worker can mesh the chunk.
+export function packChunk(world, chunk) {
+  fill(world, chunk);
+  return { pb: pb.slice(), pl: pl.slice(), pm: pm.slice(), ptint: ptint.slice() };
+}
+
+export function meshPacked(d, opts = {}) {
+  pb.set(d.pb); pl.set(d.pl); pm.set(d.pm); ptint.set(d.ptint);
+  return build(opts);
+}
+
+function build(opts) {
   const fancy = opts.fancyLeaves !== false;
   const ob = opaqueBuf, wb = waterBuf;
   ob.reset(); wb.reset();
@@ -128,6 +142,10 @@ export function buildChunkMesh(world, chunk, opts = {}) {
         else if (rt === R.LADDER) ladder(ob, b, p, x, y, z);
         else if (rt === R.LANTERN) lantern(ob, b, p, x, y, z);
         else if (rt === R.CROP) crop(ob, b, p, x, y, z);
+        else if (rt === R.SHAPED) shaped(ob, b, p, x, y, z);
+        else if (rt === R.CAMPFIRE) campfire(ob, b, p, x, y, z);
+        else if (rt === R.SEAPLANT) { liquid(wb, B.WATER, p, x, y, z); cross(ob, b, p, x, y, z, b === B.KELP && pb[p + OY] !== B.KELP ? BLOCKS[b].topLayer : 0); }
+        else if (rt === R.DRIP) drip(ob, b, p, x, y, z);
         if (ob.n + wb.n !== before) { if (y < minY) minY = y; if (y > maxY) maxY = y; }
       }
     }
@@ -148,13 +166,19 @@ function tintOf(b, f, x, z) {
 function cubeFaces(buf, b, p, x, y, z, rt, fancy) {
   const isLeaf = LEAF[b];
   const vflags = isLeaf ? 16 : 0;
+  // A leaf completely surrounded by leaves/solids can't be seen through its leafy sides.
+  let buried = false;
+  if (isLeaf) {
+    buried = true;
+    for (let f = 0; f < 6; f++) { const nb = pb[p + NOFF[f]]; if (!LEAF[nb] && !OPAQUE[nb]) { buried = false; break; } }
+  }
   const front = BLOCKS[b].front;
   for (let f = 0; f < 6; f++) {
     const np = p + NOFF[f];
     const nb = pb[np];
     if (OPAQUE[nb]) continue;
     if (nb === b && CULLSAME[b]) continue;
-    if (isLeaf && !fancy && LEAF[nb]) continue;
+    if (isLeaf && LEAF[nb] && (!fancy || buried)) continue;
     let layer = front && f === (pm[p] || 0) ? FRONTL[b] : TEXL[b * 6 + f];
     if (LOG[b] && pm[p]) {
       const end = pm[p] === 1 ? f === 0 || f === 1 : f === 4 || f === 5;
@@ -189,9 +213,9 @@ function cubeFaces(buf, b, p, x, y, z, rt, fancy) {
   }
 }
 
-function cross(buf, b, p, x, y, z) {
+function cross(buf, b, p, x, y, z, layerOverride = 0) {
   const L = pl[p], s = (L >> 4) * 17, bl = (L & 15) * 17;
-  const layer = TEXL[b * 6];
+  const layer = layerOverride || TEXL[b * 6];
   const [tr, tg, tb] = tintOf(b, 0, x, z);
   const wx = x, wz = z;
   const ox = (hash2(wx * 3 + y, wz, 17) - 0.5) * 0.3, oz = (hash2(wx, wz * 5 + y, 31) - 0.5) * 0.3;
@@ -303,8 +327,9 @@ function ladder(buf, b, p, x, y, z) {
   else { const pz = w[1] < 0 ? d : 1 - d; pts = [[0, 0, pz], [1, 0, pz], [1, 1, pz], [0, 1, pz]]; }
   const uv = [[0, 1], [1, 1], [1, 0], [0, 0]];
   buf.ensure(8);
-  for (let k = 0; k < 4; k++) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 220, 0, 255, 255, 255);
-  for (let k = 3; k >= 0; k--) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 200, 0, 255, 255, 255);
+  const [tr, tg, tb] = tintOf(b, 0, x, z);
+  for (let k = 0; k < 4; k++) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 220, 0, tr, tg, tb);
+  for (let k = 3; k >= 0; k--) buf.v(x + pts[k][0], y + pts[k][1], z + pts[k][2], uv[k][0], uv[k][1], layer, s, bl, 200, 0, tr, tg, tb);
 }
 
 function boxAt(buf, x, y, z, x0, y0, z0, x1, y1, z1, layer, s, bl) {
@@ -345,6 +370,84 @@ function crop(buf, b, p, x, y, z) {
   }
 }
 
+// Connection bits toward neighbouring fences/panes/solids: +x 1, -x 2, +z 4, -z 8.
+function connAt(p, b) {
+  let m = 0;
+  if (connects(b, pb[p + NOFF[0]])) m |= 1;
+  if (connects(b, pb[p + NOFF[1]])) m |= 2;
+  if (connects(b, pb[p + NOFF[4]])) m |= 4;
+  if (connects(b, pb[p + NOFF[5]])) m |= 8;
+  return m;
+}
+
+// One textured box inside a cell. Faces on the cell boundary are culled against
+// opaque neighbours and lit from them; inner faces use the cell's own light.
+function boxFaces(buf, p, x, y, z, q, layerOf, flags = 0, light = -1) {
+  for (let f = 0; f < 6; f++) {
+    const edge = f === 0 ? q[3] === 1 : f === 1 ? q[0] === 0 : f === 2 ? q[4] === 1 : f === 3 ? q[1] === 0 : f === 4 ? q[5] === 1 : q[2] === 0;
+    const np = p + NOFF[f];
+    if (edge && OPAQUE[pb[np]]) continue;
+    const L = light >= 0 ? light : edge ? Math.max(pl[np], pl[p]) : pl[p];
+    const s = (L >> 4) * 17, bl = (L & 15) * 17, sh = SHADE[f] * 255;
+    const layer = layerOf(f);
+    const cp = CPOS[f];
+    buf.ensure(4);
+    for (let k = 0; k < 4; k++) {
+      const c = cp[k];
+      const px = c[0] ? q[3] : q[0], py = c[1] ? q[4] : q[1], pz = c[2] ? q[5] : q[2];
+      let u, v;
+      if (f === 0 || f === 1) { u = f === 0 ? 1 - pz : pz; v = 1 - py; }
+      else if (f === 2 || f === 3) { u = px; v = pz; }
+      else { u = f === 4 ? px : 1 - px; v = 1 - py; }
+      buf.v(x + px, y + py, z + pz, u, v, layer, s, bl, sh, flags, 255, 255, 255);
+    }
+  }
+}
+
+// Stairs, doors, fences and panes.
+function shaped(buf, b, p, x, y, z) {
+  const sh = SHAPE[b], meta = pm[p];
+  const boxes = shapeBoxes(b, meta, sh === 5 || sh === 6 ? connAt(p, b) : 0, false);
+  const d = BLOCKS[b];
+  const layerOf = sh === 4 ? () => (meta & 8 ? d.topLayer : TEXL[b * 6]) : (f) => TEXL[b * 6 + f];
+  for (const q of boxes) boxFaces(buf, p, x, y, z, q, layerOf);
+}
+
+// Campfire: crossed logs with a flickering flame.
+function campfire(buf, b, p, x, y, z) {
+  const side = TEXL[b * 6], end = TEXL[b * 6 + 2];
+  const logs = [
+    [1 / 16, 0, 0, 5 / 16, 4 / 16, 1], [11 / 16, 0, 0, 15 / 16, 4 / 16, 1],
+    [0, 3 / 16, 1 / 16, 1, 7 / 16, 5 / 16], [0, 3 / 16, 11 / 16, 1, 7 / 16, 15 / 16],
+  ];
+  logs.forEach((q, i) => boxFaces(buf, p, x, y, z, q, (f) => {
+    const along = i < 2 ? 2 : 0;
+    return (along === 2 && (f === 4 || f === 5)) || (along === 0 && (f === 0 || f === 1)) ? end : side;
+  }));
+  const L = pl[p], s = (L >> 4) * 17, bl = 255, layer = LAYERS.campfire_fire;
+  const planes = [[0.15, 0.15, 0.85, 0.85], [0.85, 0.15, 0.15, 0.85]];
+  buf.ensure(16);
+  for (const [x0, z0, x1, z1] of planes) {
+    const q = [[x0, 1 / 16, z0, 0, 1], [x1, 1 / 16, z1, 1, 1], [x1, 1, z1, 1, 0], [x0, 1, z0, 0, 0]];
+    for (const v of q) buf.v(x + v[0], y + v[1], z + v[2], v[3], v[4], layer, s, bl, 255, 32, 255, 255, 255);
+    for (let k = 3; k >= 0; k--) { const v = q[k]; buf.v(x + v[0], y + v[1], z + v[2], v[3], v[4], layer, s, bl, 255, 32, 255, 255, 255); }
+  }
+}
+
+// Pointed dripstone: a narrow cross that hangs from the ceiling when meta is 1.
+function drip(buf, b, p, x, y, z) {
+  const L = pl[p], s = (L >> 4) * 17, bl = (L & 15) * 17, layer = TEXL[b * 6];
+  const hang = pm[p] === 1;
+  const planes = [[0.2, 0.2, 0.8, 0.8], [0.8, 0.2, 0.2, 0.8]];
+  buf.ensure(16);
+  for (const [x0, z0, x1, z1] of planes) {
+    const q = [[x0, 0, z0, 0, 1], [x1, 0, z1, 1, 1], [x1, 1, z1, 1, 0], [x0, 1, z0, 0, 0]];
+    if (hang) for (const v of q) v[4] = 1 - v[4];
+    for (const v of q) buf.v(x + v[0], y + v[1], z + v[2], v[3], v[4], layer, s, bl, 220, 0, 255, 255, 255);
+    for (let k = 3; k >= 0; k--) { const v = q[k]; buf.v(x + v[0], y + v[1], z + v[2], v[3], v[4], layer, s, bl, 200, 0, 255, 255, 255); }
+  }
+}
+
 // Small standalone meshes (held items, dropped items, falling blocks).
 export function blockItemMesh(id, defaultTint) {
   const d = BLOCKS[id];
@@ -359,6 +462,20 @@ export function blockItemMesh(id, defaultTint) {
         const c = cp[k];
         const cy = c[1] ? y1 : y0;
         buf.v(c[0] - 0.5, cy - 0.5, c[2] - 0.5, UVS[k][0], f === 2 || f === 3 ? UVS[k][1] : 1 - cy, layer, 255, 0, SHADE[f] * 255, 0, tint[0], tint[1], tint[2]);
+      }
+    }
+    return buf.slice();
+  }
+  if (d.render === R.SHAPED) {
+    const boxes = shapeBoxes(id, 3, 3, false);
+    for (const q of boxes) for (let f = 0; f < 6; f++) {
+      const cp = CPOS[f], layer = TEXL[id * 6 + f];
+      for (let k = 0; k < 4; k++) {
+        const c = cp[k];
+        const px = c[0] ? q[3] : q[0], py = c[1] ? q[4] : q[1], pz = c[2] ? q[5] : q[2];
+        const u = f === 0 || f === 1 ? (f === 0 ? 1 - pz : pz) : px, v = f === 2 || f === 3 ? pz : 1 - py;
+        buf.ensure(4);
+        buf.v(px - 0.5, py - 0.5, pz - 0.5, u, v, layer, 255, 0, SHADE[f] * 255, 0, 255, 255, 255);
       }
     }
     return buf.slice();

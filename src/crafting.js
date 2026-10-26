@@ -1,7 +1,7 @@
 // Crafting recipes, furnace smelting table and inventory container.
 import { B, I, maxStackOf, itemDef } from './blocks.js';
 
-const PLANKS = [B.PLANKS, B.BIRCH_PLANKS, B.SPRUCE_PLANKS, B.ACACIA_PLANKS, B.CHERRY_PLANKS];
+const PLANKS = [B.PLANKS, B.BIRCH_PLANKS, B.SPRUCE_PLANKS, B.ACACIA_PLANKS, B.CHERRY_PLANKS, B.JUNGLE_PLANKS, B.DARK_OAK_PLANKS];
 const RECIPES = [];
 
 function shaped(pattern, key, out, count = 1) {
@@ -94,6 +94,45 @@ for (const [m, mat] of TOOL_MATERIALS) {
   shaped(['MM', ' S', ' S'], { M: mat, S: [I.STICK] }, I[`${m}_HOE`]);
 }
 
+// ---- mobs & structures update ----
+shaped(['#'], { '#': [B.JUNGLE_LOG] }, B.JUNGLE_PLANKS, 4);
+shaped(['F', 'S', 'E'], { F: [I.FLINT], S: [I.STICK], E: [I.FEATHER] }, I.ARROW, 4);
+shaped([' SX', 'S X', ' SX'], { S: [I.STICK], X: [I.STRING] }, I.BOW);
+shaped(['XX', 'XX'], { X: [I.STRING] }, B.WOOL_WHITE);
+shapeless([I.BONE], B.WOOL_WHITE);
+shaped(['#', '#'], { '#': [B.LOG, B.BIRCH_LOG, B.SPRUCE_LOG] }, B.FENCE_POST, 2);
+
+// ---- shaders & content update ----
+shaped(['#'], { '#': [B.DARK_OAK_LOG] }, B.DARK_OAK_PLANKS, 4);
+const STAIRS = [['OAK_STAIRS', [B.PLANKS]], ['SPRUCE_STAIRS', [B.SPRUCE_PLANKS]], ['COBBLE_STAIRS', [B.COBBLESTONE]],
+  ['STONE_BRICK_STAIRS', [B.STONE_BRICKS]], ['BRICK_STAIRS', [B.BRICKS]], ['SANDSTONE_STAIRS', [B.SANDSTONE]]];
+for (const [k, src] of STAIRS) shaped(['#  ', '## ', '###'], { '#': src }, B[k], 4);
+shaped(['##', '##', '##'], { '#': [B.PLANKS, B.BIRCH_PLANKS, B.ACACIA_PLANKS, B.CHERRY_PLANKS, B.JUNGLE_PLANKS, B.DARK_OAK_PLANKS] }, B.OAK_DOOR, 3);
+shaped(['##', '##', '##'], { '#': [B.SPRUCE_PLANKS] }, B.SPRUCE_DOOR, 3);
+shaped(['#S#', '#S#'], { '#': [B.PLANKS, B.BIRCH_PLANKS, B.ACACIA_PLANKS, B.CHERRY_PLANKS, B.JUNGLE_PLANKS, B.DARK_OAK_PLANKS], S: [I.STICK] }, B.OAK_FENCE, 3);
+shaped(['#S#', '#S#'], { '#': [B.SPRUCE_PLANKS], S: [I.STICK] }, B.SPRUCE_FENCE, 3);
+shaped(['###', '###'], { '#': [B.GLASS] }, B.GLASS_PANE, 16);
+shaped([' S ', 'SCS', 'LLL'], { S: [I.STICK], C: [I.COAL], L: [B.LOG, B.BIRCH_LOG, B.SPRUCE_LOG, B.ACACIA_LOG, B.CHERRY_LOG, B.JUNGLE_LOG, B.DARK_OAK_LOG] }, B.CAMPFIRE);
+for (const [k] of [['WHITE'], ['RED'], ['ORANGE'], ['YELLOW'], ['GREEN'], ['BLUE'], ['PURPLE'], ['BLACK']]) {
+  shaped(['SGS', 'GWG', 'SGS'], { S: [B.SAND, B.RED_SAND], G: [B.GRAVEL], W: [B[`WOOL_${k}`]] }, B[`CONCRETE_${k}`], 8);
+}
+shaped(['###', '###', '###'], { '#': [B.ICE] }, B.PACKED_ICE);
+shaped(['###', '###', '###'], { '#': [B.PACKED_ICE] }, B.BLUE_ICE);
+shaped(['##', '##'], { '#': [B.POINTED_DRIPSTONE] }, B.DRIPSTONE_BLOCK);
+shaped(['##', '##'], { '#': [B.MUD] }, B.MUD_BRICKS, 4);
+shapeless([B.DIRT, I.WATER_BUCKET], B.MUD);
+shaped(['#G#', 'GLG', '#G#'], { '#': [B.GLASS], G: [B.CRYSTAL_CLUSTER, B.GLOW_LICHEN_STONE], L: [B.LUMEN, B.LANTERN] }, B.PRISM_LAMP, 2);
+shapeless([I.BONE], I.BONE_MEAL, 3);
+shaped([' I', 'I '], { I: [I.IRON_INGOT, I.COPPER_INGOT] }, I.SHEARS);
+const ARMOR_SRC = [['LEATHER', [I.LEATHER]], ['COPPER', [I.COPPER_INGOT]], ['IRON', [I.IRON_INGOT]], ['DIAMOND', [I.DIAMOND]]];
+for (const [m, mat] of ARMOR_SRC) {
+  const key = { M: mat };
+  shaped(['MMM', 'M M'], key, I[`${m}_HELMET`]);
+  shaped(['M M', 'MMM', 'MMM'], key, I[`${m}_CHESTPLATE`]);
+  shaped(['MMM', 'M M', 'M M'], key, I[`${m}_LEGGINGS`]);
+  shaped(['M M', 'M M'], key, I[`${m}_BOOTS`]);
+}
+
 // grid: array of stacks (or null), size w*w. Returns {id, count} or null.
 export function matchCraft(grid, w) {
   let minx = w, miny = w, maxx = -1, maxy = -1;
@@ -139,7 +178,8 @@ export const SMELT = {
   [B.COBBLESTONE]: B.STONE, [B.COPPER_ORE]: I.COPPER_INGOT, [B.STONE_BRICKS]: B.CRACKED_STONE_BRICKS, [I.RAW_PORK]: I.COOKED_PORK, [I.RAW_BEEF]: I.STEAK,
   [I.RAW_MUTTON]: I.COOKED_MUTTON, [B.LOG]: I.COAL, [B.BIRCH_LOG]: I.COAL,
   [B.SPRUCE_LOG]: I.COAL, [B.ACACIA_LOG]: I.COAL, [B.CLAY]: B.TERRACOTTA, [B.RED_SAND]: B.GLASS, [B.STONE]: B.SMOOTH_STONE, [B.CHERRY_LOG]: I.COAL,
-  [B.DIAMOND_ORE]: I.DIAMOND, [B.COAL_ORE]: I.COAL,
+  [B.DIAMOND_ORE]: I.DIAMOND, [B.COAL_ORE]: I.COAL, [I.RAW_CHICKEN]: I.COOKED_CHICKEN, [I.RAW_RABBIT]: I.COOKED_RABBIT, [B.JUNGLE_LOG]: I.COAL,
+  [I.RAW_FISH]: I.COOKED_FISH, [B.DARK_OAK_LOG]: I.COAL, [B.MUD]: B.CLAY,
 };
 export const SMELT_TIME = 8;
 export function fuelTime(id) {

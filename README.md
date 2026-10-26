@@ -14,29 +14,35 @@ Then open the printed URL in a recent Chrome, Edge, Firefox or Safari.
 
 ## Features
 
-- **Infinite world.** 16×16×128 chunks stream in around you with frustum culling and a configurable render distance.
-- **Terrain.** A 3D density field gives mountains real cliffs, arches and overhangs, while lowlands stay gentle. Rivers wind across the land.
-- **Biomes.** Oceans, beaches and stony shores, plains, flower meadows, cherry groves, forests, birch forests, swamps, taiga, snowy taiga, savannas with acacia trees, deserts, terraced badlands mesas with banded terracotta, and snow-capped peaks.
+- **Infinite world.** 16×16×128 chunks stream in around you with frustum culling.
+- **Any render distance.** Type any number of chunks (100, 300, more) in Settings. Full, editable chunks load out to the *detail distance*. Beyond that, far terrain is drawn from a quadtree of tiles sampled straight from the terrain generator, with cells that double in size with distance, so cost grows roughly with the logarithm of the distance. Forests, mountains, beaches, rivers and seas all show on the horizon. Far terrain has its own slice of the depth buffer so it stays crisp, steps aside wherever real chunks are loaded, and fills in gaps while nearby chunks are still loading.
+- **Terrain.** Height comes from smooth curves over continentalness, erosion and ridge noise, so there are deep oceans, wide beaches, broad plains, rolling hills and great mountain ranges with jagged peaks. Rivers wind across the land, and biomes span hundreds of blocks. A light 3D density pass adds cliffs and overhangs, but only in the mountains.
+- **Biomes.** Oceans, warm oceans with coral reefs, kelp forests, beaches and stony shores, plains, flower meadows, cherry groves, jungles with giant trees and hanging vines, forests, birch forests, dark forests with giant mushrooms, swamps, taiga, snowy taiga, ice spike fields, savannas with acacia trees, deserts, terraced badlands mesas with banded terracotta, and snow-capped peaks.
 - **Trees and features.** Big oaks with branches, tall spruces and birches, bushes, fallen logs, mossy boulders, sugar cane along the water, pumpkins and ferns.
-- **Underground.** Spaghetti and cavern caves, ravines, lava lakes near the bottom, crystal geodes, mushrooms, granite, marble, slate and basalt formations, and coal, copper, iron, gold and diamond ore veins.
-- **Structures.** Overgrown ruined towers on the surface and mossy crypts underground, each with a chest of loot.
+- **Underground.** Spaghetti and cavern caves, ravines, dripstone caverns with stalactites and stalagmites, flooded lower caves, lava lakes near the bottom, crystal geodes, mushrooms, granite, marble, slate and basalt formations, and coal, copper, iron, gold and diamond ore veins.
+- **Structures.** Villages with houses, farms, wells, lamp posts and roads, built in oak, spruce, acacia or desert sandstone styles. Abandoned mineshafts with timber supports, cobwebs, lanterns and chests. Desert wells, snow huts, swamp shacks on stilts, lookout towers, overgrown ruins, and mossy crypts underground.
 - **Ponds** in grassy country and rare lava pools in dry lands.
-- **Background generation.** Chunks are generated in Web Workers, so exploring doesn't stutter.
+- **Background work.** Chunks are generated and meshed in Web Workers, so exploring doesn't stutter. Blocks you break or place nearby are still remeshed instantly.
 - **Lighting.** Flood-fill sky light and block light (torches, lava, lumen blocks), smooth lighting and ambient occlusion, all updated live as you dig and build.
 - **Fluids.** Water and lava flow, fall and drain. Two water sources make an infinite pool, and water meeting lava hardens it into cobblestone or obsidian.
-- **Survival.** Health, hunger and air. You take damage from falls, drowning, lava and cacti, and can respawn after dying.
+- **Physics.** Player movement runs at 20 ticks per second with the classic per-tick constants: gravity, air drag, ground friction, a 1.25-block jump, 4.3 m/s walking and 5.6 m/s sprinting, sprint-jump boosts, slippery ice, swimming drag, ladder climbing and cobwebs. The camera interpolates between ticks, so it stays smooth at any frame rate.
+- **Survival.** Health, hunger, air and armour. You take damage from falls, drowning, lava, cacti, campfires and explosions, and can respawn after dying.
+- **Armour.** Helmets, chestplates, leggings and boots in leather, copper, iron and diamond. Each point cuts damage by 4%, pieces wear out, and an armour bar sits above your hearts.
 - **Mining.** Tools come in four tiers (wood, stone, iron, diamond) with their own speeds, durability, and rules about which blocks they can harvest.
 - **Crafting.** A 2×2 grid in your inventory and a 3×3 crafting table, with shaped and shapeless recipes (mirrored shapes work too).
 - **Containers.** Furnaces with fuel and smelting, and chests with 27 slots.
-- **Building blocks.** Stone varieties and polished versions, smooth stone, mossy, cracked and chiseled stone bricks, cherry wood, copper, eight colours of stained glass, slabs (two stack into a full block), ladders you can climb, lanterns (standing or hanging), hay bales, melons, moss and crystal.
-- **Farming.** Till grass with a hoe, plant seeds from tall grass, and harvest wheat for bread and hay. Sleep in a bedroll to skip the night and set your spawn point.
+- **Building blocks.** Stone varieties and polished versions, smooth stone, mossy, cracked and chiseled stone bricks, cherry and dark oak wood, copper, concrete in eight colours, eight colours of stained glass, glass panes, slabs (two stack into a full block), stairs (upside-down too), doors that open and close, fences that connect and can't be jumped, campfires, ladders you can climb, lanterns (standing or hanging), packed and blue ice (slippery), mud bricks, prism lamps, hay bales, melons, moss and crystal.
+- **Ocean life.** Seagrass, kelp, and coral blocks and fans that sit in water without displacing it.
+- **Farming.** Till grass with a hoe, plant seeds from tall grass, and harvest wheat for bread and hay. Bone meal ripens crops, grows saplings and sprouts flowers. Shears clip wool from sheep (it grows back) and collect leaves and grass. Sleep in a bedroll to skip the night and set your spawn point.
 - **Creative mode.** Flight, instant breaking, and a searchable palette of every block and item.
-- **Creatures.** Pigs, cows and sheep wander, look at you, flee when hit, and drop food and wool. Ghouls spawn in the dark, chase you, swing at you, and burn in sunlight. Everything casts a soft shadow.
+- **Creatures.** Pigs, cows, sheep, chickens (which lay eggs), hopping rabbits, mountain goats, foxes, wolves, bears, trout in the water and bats in caves, each in the places that suit them. Settlers live in villages. Wolves and bears leave you alone until you hit them, and a whole wolf pack answers. Tame a wolf with bones: it follows you, defends you, and sits when you right-click it. At night, ghouls chase you, spiders leap at you, bone archers keep their distance and shoot arrows, and boomshrooms creep up, swell and burst, blowing a hole in the ground. Cave beetles lurk in the dark below.
+- **Bows and arrows.** Hold right click to draw a bow and release to shoot. Arrows are made from flint (found in gravel), sticks and feathers.
 - **Third-person view (F5).** Your character's head follows where you look, the body turns with a natural lag, arms swing when you mine or attack, limbs swing as you walk, sneaking leans the body forward, and the held item shows in hand.
 - **World behaviour.** Sand and gravel fall, plants and torches pop off without support, grass spreads, and saplings grow into trees.
 - **Weather.** Rain spells and thunderstorms with lightning, snow in cold biomes, dry spells in deserts, darker skies, heavier clouds and closer fog.
-- **Graphics.** A post-processing pass adds glow around light sources and the sun, gentle colour grading, a vignette and an underwater wobble. Torches flicker, the moon has phases, and clouds have two layers. The effects can be turned off in Settings.
-- **Sky and water.** Day/night cycle with sun, moon, stars, sunset glow and drifting clouds. Water has gentle waves and sun glints, leaves sway, and torches flicker with flames and smoke.
+- **Shaders.** Real-time shadows from the sun and moon (a shadow map that follows you, with soft filtering), directional sunlight that turns warm and orange at dawn and dusk, cool blue shade, light shafts through the trees at low sun, HDR rendering with soft highlight roll-off, and glow around light sources. The Shaders setting has Off, Fast and Fancy levels.
+- **Graphics.** Gentle colour grading, a vignette and an underwater wobble. Torches flicker, campfires smoke, the moon has phases, and clouds have two layers.
+- **Sky and water.** Day/night cycle with sun, moon, stars, sunset glow and drifting clouds. Water reflects the sky with animated ripples and sun glitter, leaves sway, and torches flicker with flames and smoke.
 - **Sound.** Procedural Web Audio throughout: layered material sounds, birds by day, crickets at night, wind on mountains, rain and thunder, cave drips with echo, lapping water, and a generative score that changes with the time of day and when you're underground.
 - **Saves.** Multiple worlds stored in `localStorage`, with only the changed blocks kept per chunk.
 - **Controls.** Mouse and keyboard, or touch: a joystick, drag to look, tap to place and hold to mine.
@@ -61,7 +67,9 @@ Then open the printed URL in a recent Chrome, Edge, Firefox or Safari.
 
 Inside the inventory, you can shift-click to quick-move a stack, right-click to split one or place a single item, and press a number key while hovering a slot to swap it with that hotbar slot.
 
-Commands: `/help`, `/gamemode survival|creative`, `/time set day|night|<ticks>`, `/give <item> [count]`, `/tp x y z`, `/spawn`, `/setspawn`, `/seed`, `/kill`, `/clear`.
+Commands: `/help`, `/gamemode survival|creative`, `/time set day|night|<ticks>`, `/give <item> [count]`, `/summon <creature> [count]`, `/weather clear|rain|thunder`, `/locate <biome>`, `/tp x y z`, `/spawn`, `/setspawn`, `/seed`, `/kill`, `/clear`.
+
+Right-click a door to open it, a wolf to make it sit, and a sheep while holding shears to shear it. Right-click with armour in hand to put it on, or drop it into the armour slots in your inventory.
 
 ## Getting started in survival
 
@@ -75,14 +83,16 @@ Punch a tree for logs and turn them into planks in your inventory grid. Four pla
 | `src/game.js` | Player controller, interaction, survival rules, ticks, mob spawning, chunk streaming |
 | `src/world.js` | Chunk storage, block updates, flood-fill lighting, fluid simulation |
 | `src/worldgen.js` | Terrain density, biomes, rivers, caves, ores, trees and plants |
-| `src/genworker.js` | Web Worker that runs chunk generation off the main thread |
-| `src/mesher.js` | Chunk meshing with smooth lighting and AO, plus item, sprite and mob meshes |
-| `src/renderer.js` | WebGL 2 shaders and passes (terrain, water, sky, clouds, particles, held item) |
+| `src/genworker.js` | Web Worker that runs chunk generation and far-terrain tiles off the main thread |
+| `src/lod.js` | Far-terrain tile builder (heights, surface blocks, canopies and water from the terrain functions) |
+| `src/meshworker.js` | Web Worker that builds chunk meshes off the main thread |
+| `src/mesher.js` | Chunk meshing with smooth lighting and AO, shaped blocks, plus item, sprite and mob meshes |
+| `src/renderer.js` | WebGL 2 shaders and passes (shadow map, terrain, water, sky, clouds, particles, held item, bloom, light shafts, tone mapping) |
 | `src/textures.js` | Procedural pixel-art textures, UI icons and cloud map |
 | `src/blocks.js` | Block and item registry, tool rules |
 | `src/crafting.js` | Recipes, smelting and the inventory container |
 | `src/entities.js` | Dropped items, falling blocks and mobs |
-| `src/physics.js` | AABB collision and voxel raycasting |
+| `src/physics.js` | AABB collision against block shapes and voxel raycasting |
 | `src/ui.js` | Menus, HUD, inventory screens, chat and input |
 | `src/audio.js` | Procedural sound effects and music |
 | `src/save.js` | World persistence |
