@@ -1814,7 +1814,7 @@ export class Game {
     const amb = [lerp(0.47, 0.5, sc) * dl, lerp(0.54, 0.56, sc) * dl, lerp(0.86, 0.68, sc) * dl];
     const sd = [dir[0], Math.max(dir[1], 0.3), dir[2]], sl = Math.hypot(sd[0], sd[1], sd[2]);
     const light = { dir, sun: sunCol, amb, strength: k, shadowDir: [sd[0] / sl, sd[1] / sl, sd[2] / sl] };
-    const rays = up ? { dir: sunDir, strength: k * (0.35 + 0.45 * (1 - smooth(el / 0.6))) * (1 - wet * 0.85), color: [1.0, lerp(0.62, 0.9, warm), lerp(0.35, 0.72, warm)] } : null;
+    const rays = up ? { dir: sunDir, strength: k * (0.2 + 0.25 * (1 - smooth(el / 0.6))) * (1 - wet * 0.85), color: [1.0, lerp(0.62, 0.9, warm), lerp(0.35, 0.72, warm)] } : null;
     const axis = [0, -Math.sin(SUN_TILT), Math.cos(SUN_TILT)];
     return { sunDir, top, horizon, sunset, night: (1 - smooth((sh + 0.28) / 0.3)) * (1 - wet), starRot: ang, fog, cloud, rain, light, rays, axis };
   }
@@ -2049,7 +2049,7 @@ export class Game {
     const say = (m, kind) => this.ui.chat(m, kind);
     switch ((cmd || '').toLowerCase()) {
       case 'help':
-        say('/gamemode survival|creative, /time set day|night|<n>, /give <item> [count], /tp x y z, /spawn, /setspawn, /seed, /kill, /clear');
+        say('/gamemode survival|creative, /time set day|night|<n>, /give <item> [count], /summon <creature> [count], /weather clear|rain|thunder, /locate <biome>, /tp x y z, /spawn, /setspawn, /seed, /kill, /clear');
         break;
       case 'gamemode': case 'gm': {
         const m = (args[0] || '').toLowerCase();
@@ -2085,6 +2085,37 @@ export class Game {
         if ([x, y, z].some((v) => Number.isNaN(v))) return say('Usage: /tp x y z', 'warn');
         p.x = x; p.y = y; p.z = z; p.vy = 0; p.peakY = y;
         say(`Teleported to ${x} ${y} ${z}.`);
+        break;
+      }
+      case 'summon': {
+        const type = (args[0] || '').toLowerCase();
+        const def = MOB_TYPES[type];
+        if (!def || !def.health) return say(`Unknown creature. Try: ${Object.keys(MOB_TYPES).filter((k) => MOB_TYPES[k].health).join(', ')}`, 'warn');
+        const n = clamp(parseInt(args[1], 10) || 1, 1, 20);
+        const [dx, , dz] = this.lookDir();
+        for (let i = 0; i < n; i++) this.entities.push(new Mob(type, p.x + dx * 3 + (rand() - 0.5), p.y + 0.5, p.z + dz * 3 + (rand() - 0.5)));
+        say(`Summoned ${n} ${def.name}.`);
+        break;
+      }
+      case 'weather': {
+        const v = (args[0] || '').toLowerCase(), wt = this.weather;
+        if (v === 'clear') { wt.target = 0; wt.thunder = false; }
+        else if (v === 'rain') { wt.target = 1; wt.thunder = false; }
+        else if (v === 'thunder') { wt.target = 1; wt.thunder = true; }
+        else return say('Usage: /weather clear|rain|thunder', 'warn');
+        wt.timer = 6000 + rand() * 12000;
+        say(`Weather set to ${v}.`);
+        break;
+      }
+      case 'locate': {
+        const q = args.join(' ').toLowerCase();
+        const id = BIOME_NAMES.findIndex((n) => n.toLowerCase() === q || n.toLowerCase().replace(/\s/g, '_') === q);
+        if (id < 0) return say(`Unknown biome. Try: ${BIOME_NAMES.join(', ')}`, 'warn');
+        for (let r = 32; r < 6000; r += 32) for (let a = 0; a < 48; a++) {
+          const x = Math.round(p.x + Math.cos(a / 48 * 6.283) * r), z = Math.round(p.z + Math.sin(a / 48 * 6.283) * r);
+          if (this.gen.biomeAt(x, z) === id) return say(`Nearest ${BIOME_NAMES[id]} is around ${x} ${z} (${r} blocks away).`);
+        }
+        say(`No ${BIOME_NAMES[id]} found nearby.`, 'warn');
         break;
       }
       case 'spawn': [p.x, p.y, p.z] = p.spawn; p.peakY = p.y; say('Teleported to spawn.'); break;
