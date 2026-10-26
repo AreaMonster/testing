@@ -262,7 +262,15 @@ for (const d of BLOCKS) {
 // Per-face texture layers: TEXL[id*6+face]; FRONTL[id] for blocks with a front face.
 export const TEXL = new Uint16Array(256 * 6);
 export const FRONTL = new Uint16Array(256);
+// Foliage colours that do not depend on the biome.
+export const DEFAULT_GRASS = [124, 189, 82];
+export const BIRCH_TINT = [128, 167, 85];
+export const SPRUCE_TINT = [97, 140, 97];
+// Texture layer ids by name, filled in by bindTextures (also inside mesh workers).
+export const LAYER_IDS = {};
+
 export function bindTextures(LAYERS) {
+  Object.assign(LAYER_IDS, LAYERS);
   const L = (n) => {
     if (LAYERS[n] === undefined) throw new Error('missing texture ' + n);
     return LAYERS[n];

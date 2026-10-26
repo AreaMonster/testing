@@ -1,9 +1,8 @@
 // Builds chunk geometry with smooth lighting and ambient occlusion.
 // Vertex layout: f32 [x,y,z,u,v,layer] + u8 [sky,block,bright,flags,r,g,b,0].
-import { B, OPAQUE, RENDER, TINT, CULLSAME, LIQUID, LEAF, LOG, TEXL, FRONTL, BLOCKS, R, blockSpan } from './blocks.js';
+import { B, OPAQUE, RENDER, TINT, CULLSAME, LIQUID, LEAF, LOG, TEXL, FRONTL, BLOCKS, R, blockSpan, BIRCH_TINT, SPRUCE_TINT, LAYER_IDS as LAYERS } from './blocks.js';
 import { CH } from './consts.js';
 import { hash2 } from './noise.js';
-import { BIRCH_TINT, SPRUCE_TINT, LAYERS } from './textures.js';
 
 const PX = 18, OX = 1, OZ = PX, OY = PX * PX;
 const PSIZE = PX * PX * (CH + 2);
@@ -107,6 +106,21 @@ function cornerHeight(p, kind, cx, cz) {
 
 export function buildChunkMesh(world, chunk, opts = {}) {
   fill(world, chunk);
+  return build(opts);
+}
+
+// Copies of the padded neighbourhood, so a worker can mesh the chunk.
+export function packChunk(world, chunk) {
+  fill(world, chunk);
+  return { pb: pb.slice(), pl: pl.slice(), pm: pm.slice(), ptint: ptint.slice() };
+}
+
+export function meshPacked(d, opts = {}) {
+  pb.set(d.pb); pl.set(d.pl); pm.set(d.pm); ptint.set(d.ptint);
+  return build(opts);
+}
+
+function build(opts) {
   const fancy = opts.fancyLeaves !== false;
   const ob = opaqueBuf, wb = waterBuf;
   ob.reset(); wb.reset();

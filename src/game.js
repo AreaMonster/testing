@@ -1,6 +1,6 @@
 // Game orchestration: worlds, player, interaction, simulation ticks and frames.
 import { Renderer } from './renderer.js';
-import { buildChunkMesh } from './mesher.js';
+import { buildChunkMesh, packChunk } from './mesher.js';
 import { World, ckey } from './world.js';
 import { WorldGen, BIOME, BIOME_NAMES, placeTree } from './worldgen.js';
 import { B, I, BLOCKS, ITEMS, OPAQUE, SOLID, LIQUID, REPLACEABLE, TEXL, LOG, SHAPE, CLIMB, blockSpan, itemDef, itemName, maxStackOf, canHarvest, breakTime, toolOf, nameToId } from './blocks.js';
@@ -63,8 +63,16 @@ class Player extends Entity {
     this.bodyYaw = 0;
     this.limbPhase = 0;
     this.limbAmt = 0;
+    this.eyeDrop = 0;
+    this.acc = 0;
+    this.ox = this.oy = this.oz = 0;
   }
   held() { return this.inv.get(this.sel); }
+  // Position smoothed between physics ticks, for the camera and model.
+  // Stored as a small offset from the physics position so teleports apply at once.
+  get ix() { return this.x + this.ox; }
+  get iy() { return this.y + this.oy; }
+  get iz() { return this.z + this.oz; }
 }
 
 // Generates chunks in Web Workers; falls back to the main thread if workers fail.
@@ -110,10 +118,52 @@ class GenPool {
   }
 }
 
+// Builds chunk meshes in Web Workers. Nearby edits are still meshed on the
+// main thread so a broken block never lingers for a frame.
+class MeshPool {
+  constructor() {
+    this.workers = [];
+    this.ready = [];
+    this.inflight = 0;
+    this.failed = false;
+    const n = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 4) - 1));
+    try {
+      for (let i = 0; i < n; i++) {
+        const w = new Worker(new URL('./meshworker.js', import.meta.url), { type: 'module' });
+        const slot = { w, jobs: 0 };
+        w.onmessage = (e) => { slot.jobs--; this.inflight--; this.ready.push(e.data); };
+        w.onerror = (e) => { e.preventDefault?.(); this.fail(); };
+        w.postMessage({ layers: LAYERS });
+        this.workers.push(slot);
+      }
+    } catch {
+      this.fail();
+    }
+  }
+  fail() {
+    this.failed = true;
+    for (const s of this.workers) s.w.terminate();
+    this.workers = [];
+    this.inflight = 0;
+  }
+  get capacity() { return this.workers.length * 2; }
+  request(job) {
+    let best = this.workers[0];
+    for (const s of this.workers) if (s.jobs < best.jobs) best = s;
+    best.jobs++;
+    this.inflight++;
+    best.w.postMessage(job, [job.pb.buffer, job.pl.buffer, job.pm.buffer, job.ptint.buffer]);
+  }
+}
+
+let chunkUid = 0;
+
 const DEFAULT_SETTINGS = {
   renderDist: 8, fov: 75, sensitivity: 1, gamma: 0.85, music: 0.4, sfx: 0.8,
-  bob: true, fancyLeaves: true, clouds: true, invertY: false, scale: 1, post: true,
+  bob: true, fancyLeaves: true, clouds: true, invertY: false, scale: 1, post: true, shaders: 2,
 };
+// The sun's path is tilted toward the south so noon shadows have some shape.
+const SUN_TILT = 0.38;
 
 export class Game {
   constructor(canvas, ui, audio) {
@@ -122,7 +172,7 @@ export class Game {
     this.audio = audio;
     this.renderer = new Renderer(canvas);
     this.settings = Object.assign({}, DEFAULT_SETTINGS, Store.loadSettings());
-    if (matchMedia('(pointer: coarse)').matches && !Store.loadSettings().renderDist) this.settings.renderDist = 5;
+    if (matchMedia('(pointer: coarse)').matches && !Store.loadSettings().renderDist) { this.settings.renderDist = 5; this.settings.shaders = 0; }
     this.state = 'menu';
     this.world = null;
     this.player = new Player();
@@ -161,6 +211,7 @@ export class Game {
     this.cloudOffset = 0;
     this.loadStart = 0;
     this.pool = new GenPool();
+    this.meshPool = new MeshPool();
     this.weather = { rain: 0, target: 0, timer: 6000 + rand() * 12000, thunder: false, flash: 0, boltT: 10 };
     this.storm = false;
     this.precipHere = 0;
@@ -174,7 +225,9 @@ export class Game {
     const s = this.settings;
     this.audio.setVolumes(s.sfx, s.music);
     Store.saveSettings(s);
-    if (this.world) for (const c of this.world.chunks.values()) c.dirty = true;
+    // Only leaf style changes the meshes; everything else is read per frame.
+    if (this.world && this.meshedLeaves !== s.fancyLeaves) for (const c of this.world.chunks.values()) c.dirty = true;
+    this.meshedLeaves = s.fancyLeaves;
   }
 
   // ---------------------------------------------------------------- worlds
@@ -313,15 +366,41 @@ export class Game {
     }
     const t1 = performance.now();
     const opts = { fancyLeaves: this.settings.fancyLeaves };
+    const mp = this.meshPool;
+    // Adopt meshes finished by workers, unless a newer one already landed.
+    while (mp.ready.length) {
+      const d = mp.ready.shift();
+      const c = d.epoch === this.epoch && w.chunks.get(d.key);
+      if (!c || c.uid !== d.uid) continue;
+      c.meshing = false;
+      if (d.ver > (c.meshVer || 0)) {
+        c.meshVer = d.ver;
+        this.renderer.setChunkMesh(c, d);
+      }
+      busy = true;
+    }
     for (const [dx, dz, d2] of this.offsets) {
       if (d2 > meshR2) break;
       const c = w.getChunk(pcx + dx, pcz + dz);
-      if (c && c.dirty && this.neighborsReady(c)) {
+      if (!c || !c.dirty || !this.neighborsReady(c)) continue;
+      if (!c.uid) c.uid = ++chunkUid;
+      const ver = (c.reqVer = (c.reqVer || 0) + 1);
+      // Nearby edits must never wait; far chunks go to the workers.
+      if (d2 <= 2 || mp.failed) {
         this.renderer.setChunkMesh(c, buildChunkMesh(w, c, opts));
+        c.meshVer = ver;
         c.dirty = false;
         busy = true;
-        // Nearby edits must never wait; far chunks share the frame budget.
         if (d2 > 2 && performance.now() - t1 > budget) break;
+      } else {
+        if (c.meshing) { c.reqVer--; continue; }
+        if (mp.inflight >= mp.capacity) { c.reqVer--; break; }
+        const job = packChunk(w, c);
+        job.key = ckey(c.cx, c.cz); job.uid = c.uid; job.ver = ver; job.epoch = this.epoch; job.opts = opts;
+        mp.request(job);
+        c.meshing = true;
+        c.dirty = false;
+        busy = true;
       }
     }
     this.unloadT -= 1;
@@ -485,89 +564,162 @@ export class Game {
 
   // ---------------------------------------------------------------- player
   updatePlayerPassive(dt) {
-    const p = this.player;
-    p.vx *= 0.8; p.vz *= 0.8;
-    if (!p.flying) p.vy = Math.max(p.vy - 32 * dt, -78);
-    else p.vy *= 0.8;
-    moveEntity(this.world, p, p.vx * dt, p.vy * dt, p.vz * dt);
-    this.survival(dt, p.liquidAt(this.world, 0.1));
+    this.updatePlayer(dt, true);
   }
 
-  updatePlayer(dt) {
+  // Movement runs at a fixed 20 ticks per second with per-tick constants
+  // (gravity 0.08, drag 0.98, ground friction 0.546, jump 0.42 ...), and the
+  // camera interpolates between ticks. Velocities are stored in blocks/second.
+  updatePlayer(dt, passive = false) {
     const p = this.player, w = this.world, k = this.keys, t = this.touch;
-    let f = t.f, s = t.s;
-    if (k.has('KeyW') || k.has('ArrowUp')) f += 1;
-    if (k.has('KeyS') || k.has('ArrowDown')) f -= 1;
-    if (k.has('KeyD') || k.has('ArrowRight')) s += 1;
-    if (k.has('KeyA') || k.has('ArrowLeft')) s -= 1;
-    const jump = k.has('Space') || t.jump;
-    const sneakKey = k.has('ShiftLeft') || k.has('ShiftRight') || t.sneak;
-    p.jumpCd -= dt;
-    p.attackCd -= dt;
-    if ((k.has('ControlLeft') || k.has('ControlRight') || t.sprint) && f > 0) p.sprinting = true;
+    let f = 0, s = 0, jump = false, sneakKey = false;
+    if (!passive) {
+      f = t.f; s = t.s;
+      if (k.has('KeyW') || k.has('ArrowUp')) f += 1;
+      if (k.has('KeyS') || k.has('ArrowDown')) f -= 1;
+      if (k.has('KeyD') || k.has('ArrowRight')) s += 1;
+      if (k.has('KeyA') || k.has('ArrowLeft')) s -= 1;
+      jump = k.has('Space') || t.jump;
+      sneakKey = k.has('ShiftLeft') || k.has('ShiftRight') || t.sneak;
+      p.attackCd -= dt;
+      if ((k.has('ControlLeft') || k.has('ControlRight') || t.sprint) && f > 0) p.sprinting = true;
+    }
     if (f <= 0 || sneakKey || (p.mode === 'survival' && p.hunger <= 6)) p.sprinting = false;
     p.sneaking = sneakKey && !p.flying;
+    const input = { f: clamp(f, -1, 1), s: clamp(s, -1, 1), jump, sneak: sneakKey };
+    const rx0 = p.ix, rz0 = p.iz;
+
+    p.acc = (p.acc || 0) + dt;
+    let n = 0;
+    while (p.acc >= TICK && n++ < 5) {
+      p.acc -= TICK;
+      p.px = p.x; p.py = p.y; p.pz = p.z;
+      this.playerTick(input);
+    }
+    if (p.acc > TICK) p.acc = 0;
+    if (p.px === undefined || Math.abs(p.x - p.px) + Math.abs(p.y - p.py) + Math.abs(p.z - p.pz) > 4) { p.px = p.x; p.py = p.y; p.pz = p.z; }
+    const a = 1 - p.acc / TICK;
+    p.ox = (p.px - p.x) * a; p.oy = (p.py - p.y) * a; p.oz = (p.pz - p.z) * a;
+    p.eyeDrop += ((p.sneaking ? 0.3 : 0) - (p.eyeDrop || 0)) * Math.min(1, dt * 14);
+
+    // View bob & footsteps
+    let moved = Math.hypot(p.ix - rx0, p.iz - rz0);
+    if (moved > 4) moved = 0;
+    if (p.onGround && !p.flying) {
+      p.bobPhase += moved * 2.2;
+      p.stepDist += moved;
+      if (p.stepDist > (p.sprinting ? 2.1 : 1.7)) { p.stepDist = 0; this.footstep(false); }
+    }
+    p.bobAmt += ((p.onGround && moved > 0.001 ? 1 : 0) - p.bobAmt) * Math.min(1, 8 * dt);
+    p.fovBoost += ((p.sprinting ? 1 : 0) - p.fovBoost) * Math.min(1, 6 * dt);
+    this.animatePlayer(dt, moved);
+    this.survival(dt, p.liquidAt(w, 0.2));
+  }
+
+  // Block friction under the player (ice is slippery).
+  slipAt(x, y, z) {
+    const id = this.world.getBlock(Math.floor(x), Math.floor(y - 0.5), Math.floor(z));
+    return BLOCKS[id].slip || 0.6;
+  }
+
+  playerTick(inp) {
+    const p = this.player, w = this.world;
+    let vx = p.vx * TICK, vy = p.vy * TICK, vz = p.vz * TICK;
     const liquid = p.liquidAt(w, 0.2);
-    const sinY = Math.sin(p.yaw), cosY = Math.cos(p.yaw);
-    let wx = -sinY * f + cosY * s, wz = -cosY * f - sinY * s;
-    const len = Math.hypot(wx, wz);
-    if (len > 1) { wx /= len; wz /= len; }
     const prevGround = p.onGround;
-    const x0 = p.x, z0 = p.z;
+    p.jumpCd = Math.max(0, (p.jumpCd || 0) - 1);
+    // Input, MC style: sneaking slows to 30%, diagonal is normalised.
+    let fi = inp.f * 0.98, si = inp.s * 0.98;
+    if (p.sneaking) { fi *= 0.3; si *= 0.3; }
+    const accel = (amount) => {
+      let d = fi * fi + si * si;
+      if (d < 1e-4) return;
+      d = Math.max(1, Math.sqrt(d));
+      const k = amount / d, sy = Math.sin(p.yaw), cy = Math.cos(p.yaw);
+      vx += (-sy * fi + cy * si) * k;
+      vz += (-cy * fi - sy * si) * k;
+    };
+    let mvx, mvy, mvz;
 
     if (p.flying) {
-      const sp = p.sprinting ? 21 : 10.9, kk = Math.min(1, 8 * dt);
-      p.vx += (wx * sp - p.vx) * kk;
-      p.vz += (wz * sp - p.vz) * kk;
-      p.vy += (((jump ? 1 : 0) - (sneakKey ? 1 : 0)) * 8 - p.vy) * kk;
-      moveEntity(w, p, p.vx * dt, p.vy * dt, p.vz * dt);
-      if (p.onGround) p.flying = false;
+      accel(p.sprinting ? 0.1 : 0.05);
+      if (inp.jump) vy += 0.25;
+      if (inp.sneak) vy -= 0.25;
+      mvx = vx; mvy = vy; mvz = vz;
+      p.vx = vx; p.vy = vy; p.vz = vz;
+      moveEntity(w, p, mvx, mvy, mvz);
+      vx = p.vx * 0.91; vz = p.vz * 0.91; vy = p.vy * 0.6;
+      if (p.onGround && p.mode !== 'spectator') p.flying = false;
     } else if (liquid) {
-      const sp = p.sneaking ? 1.2 : p.sprinting ? 3.2 : 2.3, kk = Math.min(1, 5 * dt);
-      p.vx += (wx * sp - p.vx) * kk;
-      p.vz += (wz * sp - p.vz) * kk;
-      if (jump) p.vy = Math.min(p.vy + 24 * dt, liquid === 2 ? 2 : 3.4);
-      else p.vy = Math.max(p.vy - 10 * dt, sneakKey ? -4 : -2.4);
-      moveEntity(w, p, p.vx * dt, p.vy * dt, p.vz * dt);
-      if (jump && (p.hitX || p.hitZ)) p.vy = 6.5;
+      // Swimming: weak acceleration, heavy drag, slow sinking; space swims up.
+      const lava = liquid === 2;
+      accel(p.sprinting && !lava ? 0.039 : 0.02);
+      if (inp.jump) vy += 0.04;
+      if (inp.sneak) vy -= 0.04;
+      p.vx = vx; p.vy = vy; p.vz = vz;
+      const y0 = p.y;
+      moveEntity(w, p, p.vx, p.vy, p.vz, 0);
+      const drag = lava ? 0.5 : 0.8;
+      vx = p.vx * drag; vy = p.vy * drag - 0.02; vz = p.vz * drag;
+      // Hop out onto a ledge when swimming into it.
+      if ((p.hitX || p.hitZ) && inp.jump) {
+        const b = entityBox(p);
+        b[1] += 0.6 - (p.y - y0) + vy; b[4] += 0.6 - (p.y - y0) + vy;
+        if (!boxTouches(w, b, (id) => SOLID[id])) vy = 0.3;
+      }
     } else {
-      const sp = p.sneaking ? 1.3 : p.sprinting ? 5.6 : 4.3;
-      const kk = Math.min(1, (p.onGround ? 16 : 3.2) * dt);
-      p.vx += (wx * sp - p.vx) * kk;
-      p.vz += (wz * sp - p.vz) * kk;
-      p.vy = Math.max(p.vy - 32 * dt, -78);
-      if (jump && p.onGround && p.jumpCd <= 0) {
-        p.vy = 8.7;
-        p.jumpCd = 0.08;
-        if (p.sprinting) { p.vx += wx * 1.6; p.vz += wz * 1.6; }
+      const slip = p.onGround ? this.slipAt(p.x, p.y, p.z) * 0.91 : 0.91;
+      const speed = p.sprinting ? 0.13 : 0.1;
+      accel(p.onGround ? speed * (0.16277136 / (slip * slip * slip)) : (p.sprinting ? 0.026 : 0.02));
+      if (inp.jump && p.onGround && p.jumpCd === 0) {
+        vy = 0.42;
+        p.jumpCd = 10;
+        if (p.sprinting) { vx += -Math.sin(p.yaw) * 0.2; vz += -Math.cos(p.yaw) * 0.2; }
         p.exhaustion += p.sprinting ? 0.2 : 0.05;
       }
-      let dx = p.vx * dt, dz = p.vz * dt;
+      if (!inp.jump) p.jumpCd = 0;
+      // Ladders and vines cap speed and let the player climb.
+      const cx = Math.floor(p.x), cz = Math.floor(p.z);
+      const onLadder = CLIMB[w.getBlock(cx, Math.floor(p.y + 0.1), cz)] || CLIMB[w.getBlock(cx, Math.floor(p.y + 1), cz)];
+      if (onLadder) {
+        vx = clamp(vx, -0.15, 0.15); vz = clamp(vz, -0.15, 0.15);
+        vy = Math.max(vy, -0.15);
+        if (inp.sneak && vy < 0) vy = 0;
+        p.peakY = p.y;
+      }
+      mvx = vx; mvy = vy; mvz = vz;
+      const inWeb = BLOCKS[w.getBlock(cx, Math.floor(p.y + 0.2), cz)].web || BLOCKS[w.getBlock(cx, Math.floor(p.y + 1.2), cz)].web;
+      if (inWeb) { mvx *= 0.25; mvy *= 0.05; mvz *= 0.25; p.peakY = p.y; }
+      // Sneaking never walks off an edge.
       if (p.sneaking && p.onGround) {
         const hw = p.w / 2;
-        if (!groundBelow(w, p.x + dx - hw, p.z - hw, p.x + dx + hw, p.z + hw, p.y)) { dx = 0; p.vx = 0; }
-        if (!groundBelow(w, p.x + dx - hw, p.z + dz - hw, p.x + dx + hw, p.z + dz + hw, p.y)) { dz = 0; p.vz = 0; }
+        if (!groundBelow(w, p.x + mvx - hw, p.z - hw, p.x + mvx + hw, p.z + hw, p.y)) { mvx = 0; vx = 0; }
+        if (!groundBelow(w, p.x + mvx - hw, p.z + mvz - hw, p.x + mvx + hw, p.z + mvz + hw, p.y)) { mvz = 0; vz = 0; }
       }
-      const onLadder = CLIMB[w.getBlock(Math.floor(p.x), Math.floor(p.y + 0.1), Math.floor(p.z))] || CLIMB[w.getBlock(Math.floor(p.x), Math.floor(p.y + 1), Math.floor(p.z))];
-      if (onLadder) {
-        p.peakY = p.y;
-        if (jump || f > 0) p.vy = 3.2;
-        else if (sneakKey) p.vy = 0;
-        else p.vy = Math.max(p.vy, -2.4);
-      }
-      if (BLOCKS[w.getBlock(Math.floor(p.x), Math.floor(p.y + 0.2), Math.floor(p.z))].web || BLOCKS[w.getBlock(Math.floor(p.x), Math.floor(p.y + 1.2), Math.floor(p.z))].web) {
-        dx *= 0.15; dz *= 0.15; p.vy = Math.max(p.vy, -1.2); p.peakY = p.y;
-      }
-      moveEntity(w, p, dx, p.vy * dt, dz, p.sneaking ? 0 : 0.55);
-      if (onLadder && (p.hitX || p.hitZ) && f > 0) p.vy = 3.2;
+      p.vx = vx; p.vy = vy; p.vz = vz;
+      moveEntity(w, p, mvx, mvy, mvz, p.sneaking ? 0 : 0.6);
+      vx = p.vx; vy = p.vy; vz = p.vz;
+      if (inWeb) { vx = vy = vz = 0; }
+      if (onLadder && (p.hitX || p.hitZ || (inp.jump && !p.onGround))) vy = 0.2;
+      vy = (vy - 0.08) * 0.98;
+      const slip2 = p.onGround ? this.slipAt(p.x, p.y, p.z) * 0.91 : 0.91;
+      vx *= slip2; vz *= slip2;
+      if (Math.abs(vx) < 0.003) vx = 0;
+      if (Math.abs(vz) < 0.003) vz = 0;
     }
+    p.vx = vx / TICK; p.vy = vy / TICK; p.vz = vz / TICK;
     if ((p.hitX || p.hitZ) && !p.flying) p.sprinting = false;
 
-    // Fall damage
+    // Fall damage: one heart-half per block beyond three.
     if (p.onGround || liquid || p.flying) {
       if (p.onGround && !prevGround && !liquid && !p.flying) {
         const fall = p.peakY - p.y;
-        if (fall > 3.4 && p.mode === 'survival') this.damagePlayer(Math.floor(fall - 3), null, 'fell from a high place');
+        if (fall > 3 && p.mode === 'survival') {
+          const below = w.getBlock(Math.floor(p.x), Math.floor(p.y - 0.2), Math.floor(p.z));
+          const soft = below === B.HAY_BALE ? 0.2 : 1;
+          const dmg = Math.ceil((fall - 3) * soft - 1e-6);
+          if (dmg > 0) this.damagePlayer(dmg, null, 'fell from a high place');
+        }
         if (fall > 1.2) this.footstep(true);
       }
       p.peakY = p.y;
@@ -575,20 +727,8 @@ export class Game {
 
     if (liquid && !p.wasInWater && p.vy < -4) { this.audio.play('splash'); this.spawnSplash(p.x, p.y, p.z); }
     p.wasInWater = !!liquid;
-
-    // View bob & footsteps
-    const moved = Math.hypot(p.x - x0, p.z - z0);
-    if (p.onGround && !p.flying) {
-      p.bobPhase += moved * 2.2;
-      p.stepDist += moved;
-      if (p.stepDist > (p.sprinting ? 2.1 : 1.7)) { p.stepDist = 0; this.footstep(false); }
-      p.exhaustion += moved * (p.sprinting ? 0.1 : 0.01);
-    }
-    p.bobAmt += ((p.onGround && moved > 0.001 ? 1 : 0) - p.bobAmt) * Math.min(1, 8 * dt);
-    p.fovBoost += ((p.sprinting ? 1 : 0) - p.fovBoost) * Math.min(1, 6 * dt);
-    this.animatePlayer(dt, moved);
+    if (p.onGround && !p.flying) p.exhaustion += Math.hypot(p.x - p.px, p.z - p.pz) * (p.sprinting ? 0.1 : 0.01);
     if (p.y < -64) this.damagePlayer(4, null, 'fell out of the world');
-    this.survival(dt, liquid);
   }
 
   // Third-person body animation: legs/arms swing with distance walked, and the
@@ -655,7 +795,7 @@ export class Game {
     this.audio.play('hurt');
     if (src) {
       const dx = p.x - src.x, dz = p.z - src.z, d = Math.hypot(dx, dz) || 1;
-      p.vx = (dx / d) * 6; p.vz = (dz / d) * 6; p.vy = 5;
+      p.vx = (dx / d) * 8; p.vz = (dz / d) * 8; p.vy = 7.2;
       cause = `was slain by a ${src.def.name}`;
     }
     if (p.health <= 0) this.die(cause);
@@ -706,7 +846,7 @@ export class Game {
     this.breakCd -= dt;
     this.useCd -= dt;
     const [dx, dy, dz] = this.lookDir();
-    const ex = p.x, ey = p.y + p.eye, ez = p.z;
+    const ex = p.ix, ey = p.iy + p.eye - p.eyeDrop, ez = p.iz;
     const reach = p.mode === 'creative' ? 6 : 5;
     const hit = raycast(w, ex, ey, ez, dx, dy, dz, reach);
     let mob = null, mobT = 3.6;
@@ -922,7 +1062,7 @@ export class Game {
       return;
     }
     if (held.id === I.BUCKET) {
-      const lh = raycast(w, p.x, p.y + p.eye, p.z, dx, dy, dz, 5, true);
+      const lh = raycast(w, p.ix, p.iy + p.eye - p.eyeDrop, p.iz, dx, dy, dz, 5, true);
       if (lh && LIQUID[lh.id]) {
         w.setBlock(lh.x, lh.y, lh.z, 0);
         this.audio.play('splash', { vol: 0.3 });
@@ -932,7 +1072,7 @@ export class Game {
       return;
     }
     if (!hit) return;
-    const hitY = p.y + p.eye + dy * hit.t;
+    const hitY = p.iy + p.eye - p.eyeDrop + dy * hit.t;
     // Two matching slabs become the full block.
     if (SHAPE[held.id] === 1 && hit.id === held.id && BLOCKS[held.id].full !== undefined) {
       const m = w.getMeta(hit.x, hit.y, hit.z);
@@ -1400,7 +1540,7 @@ export class Game {
   skyState(cam) {
     const t = this.world.time / 24000;
     const ang = t * Math.PI * 2;
-    const sunDir = [Math.cos(ang), Math.sin(ang), 0];
+    const sunDir = [Math.cos(ang), Math.sin(ang) * Math.cos(SUN_TILT), Math.sin(ang) * Math.sin(SUN_TILT)];
     const sh = sunDir[1];
     const day = smooth((sh + 0.2) / 0.5);
     const rain = this.weather.rain * this.precipHere;
@@ -1420,12 +1560,26 @@ export class Game {
     const fog = [horizon[0] + sunset[0] * toward * 0.45, horizon[1] + sunset[1] * toward * 0.45, horizon[2] + sunset[2] * toward * 0.45];
     const cloud = mixc(mixc([0.1, 0.11, 0.16], [1, 1, 1], day), grey, wet * 0.7);
     cloud[0] += sunset[0] * 0.4; cloud[1] += sunset[1] * 0.3;
-    return { sunDir, top, horizon, sunset, night: (1 - smooth((sh + 0.28) / 0.3)) * (1 - wet), starRot: ang, fog, cloud, rain };
+    // Direct light: the sun by day, a faint moon by night, fading out near the horizon.
+    const up = sh >= 0, el = Math.abs(sh);
+    const k = smooth(el / 0.2) * (1 - 0.8 * wet);
+    const dir = up ? sunDir : [-sunDir[0], -sunDir[1], -sunDir[2]];
+    const warm = smooth(el / 0.55);
+    const sunCol = up
+      ? [lerp(0.7, 0.66, warm) * k, lerp(0.38, 0.6, warm) * k, lerp(0.16, 0.5, warm) * k]
+      : [0.07 * k, 0.088 * k, 0.13 * k];
+    const dl = this.daylight, sc = Math.min(1, Math.max(0, dl * 1.3 - 0.2));
+    const amb = [lerp(0.47, 0.5, sc) * dl, lerp(0.54, 0.56, sc) * dl, lerp(0.86, 0.68, sc) * dl];
+    const sd = [dir[0], Math.max(dir[1], 0.3), dir[2]], sl = Math.hypot(sd[0], sd[1], sd[2]);
+    const light = { dir, sun: sunCol, amb, strength: k, shadowDir: [sd[0] / sl, sd[1] / sl, sd[2] / sl] };
+    const rays = up ? { dir: sunDir, strength: k * (0.35 + 0.45 * (1 - smooth(el / 0.6))) * (1 - wet * 0.85), color: [1.0, lerp(0.62, 0.9, warm), lerp(0.35, 0.72, warm)] } : null;
+    const axis = [0, -Math.sin(SUN_TILT), Math.cos(SUN_TILT)];
+    return { sunDir, top, horizon, sunset, night: (1 - smooth((sh + 0.28) / 0.3)) * (1 - wet), starRot: ang, fog, cloud, rain, light, rays, axis };
   }
 
   cameraState() {
     const p = this.player;
-    let x = p.x, y = p.y + (p.sneaking ? p.eye - 0.12 : p.eye), z = p.z;
+    let x = p.ix, y = p.iy + p.eye - p.eyeDrop, z = p.iz;
     let yaw = p.yaw, pitch = p.pitch, roll = 0;
     if (this.settings.bob && this.state !== 'menu' && this.cameraMode === 0) {
       const b = p.bobAmt;
@@ -1564,7 +1718,9 @@ export class Game {
     }
     if (this.cameraMode !== 0 && this.state !== 'menu' && p.alive) {
       const held = p.held();
-      for (const d of poseDraws(this, cam, 'player', p, {
+      const pr = Object.create(p);
+      pr.x = p.ix; pr.y = p.iy; pr.z = p.iz;
+      for (const d of poseDraws(this, cam, 'player', pr, {
         bodyYaw: p.bodyYaw, headYaw: angleDiff(p.yaw, p.bodyYaw), headPitch: p.pitch,
         phase: p.limbPhase, amount: p.limbAmt, swing: p.swing, sneak: p.sneaking,
         held: held ? held.id : null, color: p.hurtT > 0 ? [1, 0.5, 0.5, 1] : null,
@@ -1581,17 +1737,21 @@ export class Game {
         }
       }
     };
-    for (const e of this.entities) {
-      if (Math.abs(e.x - p.x) > 40 || Math.abs(e.z - p.z) > 40) continue;
-      if (e instanceof Mob) addShadow(e, e.w * 1.5);
-      else if (e instanceof ItemEntity) addShadow(e, 0.45);
+    const shade = this.settings.shaders | 0;
+    if (!shade) {
+      for (const e of this.entities) {
+        if (Math.abs(e.x - p.x) > 40 || Math.abs(e.z - p.z) > 40) continue;
+        if (e instanceof Mob) addShadow(e, e.w * 1.5);
+        else if (e instanceof ItemEntity) addShadow(e, 0.45);
+      }
+      if (this.cameraMode !== 0 && this.state !== 'menu' && p.alive) addShadow(p, 0.9);
     }
-    if (this.cameraMode !== 0 && this.state !== 'menu' && p.alive) addShadow(p, 0.9);
     this.cloudOffset += dt * 1.2;
     const L = w.getLight(Math.floor(p.x), Math.floor(p.y + p.eye), Math.floor(p.z));
     const frame = {
       cam, far, fog, daylight: this.daylight, time: this.time, gamma: this.settings.gamma,
-      sky: { sunDir: sky.sunDir, top: sky.top, horizon: sky.horizon, sunset: sky.sunset, night: sky.night, starRot: sky.starRot },
+      sky: { sunDir: sky.sunDir, top: sky.top, horizon: sky.horizon, sunset: sky.sunset, night: sky.night, starRot: sky.starRot, axis: sky.axis },
+      shade, light: sky.light, rays: shade > 1 && eyeLiquid !== 1 ? sky.rays : null,
       chunks: this.chunkList || [], entities: ents, particles: this.particles, shadows,
       selection: this.state === 'play' && this.target && !this.hudHidden ? this.selectionBox(this.target) : null,
       post: this.settings.post,

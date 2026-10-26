@@ -190,11 +190,11 @@ export class UI {
     click('btn-death-title', () => { g.quitToTitle(); });
     $('clicktoplay').addEventListener('click', () => this.lock());
 
-    const keys = ['renderDist', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale'];
+    const keys = ['renderDist', 'shaders', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale'];
     const fmt = {
       renderDist: (v) => (v > 16 ? `${v} chunks (needs a fast computer)` : `${v} chunks`), fov: (v) => `${v}°`, sensitivity: (v) => `${Math.round(v * 100)}%`,
       gamma: (v) => `${Math.round(v * 100)}%`, music: (v) => `${Math.round(v * 100)}%`, sfx: (v) => `${Math.round(v * 100)}%`,
-      scale: (v) => `${Math.round(v * 100)}%`,
+      scale: (v) => `${Math.round(v * 100)}%`, shaders: (v) => ['Off', 'Fast (shadows)', 'Fancy (soft shadows, light shafts)'][v | 0],
     };
     for (const k of keys) {
       $(`set-${k}`).addEventListener('input', (e) => {
@@ -211,7 +211,7 @@ export class UI {
 
   renderSettings() {
     const s = this.game.settings;
-    for (const k of ['renderDist', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale']) {
+    for (const k of ['renderDist', 'shaders', 'fov', 'sensitivity', 'gamma', 'music', 'sfx', 'scale']) {
       $(`set-${k}`).value = s[k];
       $(`out-${k}`).textContent = this.fmt[k](s[k]);
     }

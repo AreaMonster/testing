@@ -1,7 +1,7 @@
 // Procedural 16x16 pixel-art textures. Every block, item, mob skin and crack
 // stage is painted here at startup into one texture array.
 import { mulberry32, hashStr } from './noise.js';
-import { WOOL_COLORS, TERRACOTTA_COLORS, GLASS_COLORS, BLOCKS, ITEMS, R, TEXL, FRONTL, itemDef } from './blocks.js';
+import { WOOL_COLORS, TERRACOTTA_COLORS, GLASS_COLORS, BLOCKS, ITEMS, R, TEXL, FRONTL, itemDef, DEFAULT_GRASS, BIRCH_TINT, SPRUCE_TINT } from './blocks.js';
 
 export const LAYERS = {};
 export const layerData = [];
@@ -1354,9 +1354,7 @@ export function textureArrayData() {
 }
 
 // ---------- tints ----------
-export const DEFAULT_GRASS = [124, 189, 82];
-export const BIRCH_TINT = [128, 167, 85];
-export const SPRUCE_TINT = [97, 140, 97];
+export { DEFAULT_GRASS, BIRCH_TINT, SPRUCE_TINT };
 
 // ---------- UI icons ----------
 const iconCache = new Map();
